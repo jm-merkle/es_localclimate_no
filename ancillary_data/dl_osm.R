@@ -37,3 +37,7 @@ for(i in 1:nrow(cityb_buf)){
 
 #tidy up
 rm(fp,road_shp_list)
+
+
+
+
