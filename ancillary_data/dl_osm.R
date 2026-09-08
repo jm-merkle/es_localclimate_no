@@ -13,7 +13,7 @@ osm_get_streets_for_shp<-function(kshp){
     sf::st_as_sf() %>%
     sf::st_bbox() %>%
     osmdata::opq() %>%
-    osmdata::add_osm_feature(key="highway",value = c("motorway","trunk","primary","secondary")) %>%
+    osmdata::add_osm_feature(key="highway",value = c("motorway","trunk","primary")) %>%
     osmdata_sf()
   # reproject
   roads_t <- roads$osm_lines %>%
@@ -32,7 +32,7 @@ for(i in 1:nrow(cityb_buf)){
 
 # then save
 for(i in 1:nrow(cityb_buf)){
-  writeVector(road_shp_list[[i]],file.path(fp,paste0("roads_",cityb_buf$LAU_ID[i],".shp")))
+  writeVector(road_shp_list[[i]],file.path(fp,paste0("roads_",cityb_buf$LAU_ID[i],".shp")),overwrite=T)
 }
 
 #tidy up

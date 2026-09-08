@@ -1,3 +1,5 @@
+
+
 j=2 # means july
 
 
@@ -5,7 +7,7 @@ df_sut<-as.data.frame(matrix(ncol=14,nrow=nrow(cityb_buf)))
 colnames(df_sut)<-c("LAU",estv,"w_avg_cool")
 
 
-i=2 # means first city
+i=8 # means first city
 
 
 # the LAU name
@@ -14,9 +16,6 @@ r <- mask(
   crop(cooling_stack[[j]], cityb_buf[i, ]),
   cityb_buf[i, ]
 )
-plot(r)
-
-r <- mask(r, crop(lstr_stack[[i]],cityb_buf[i,]))
 plot(r)
 
 
@@ -29,8 +28,11 @@ global(r, mean, na.rm = TRUE)
 
 plot(crop(lstr_stack[[i]],cityb_buf[i,]))
 
+# we are not exactly alike INCA, but close. I wonder whether this is related to 
+# that they have masked out some of the missing inputs, but not all?
 
-
+# test whether it makes a difference to apply the non-simplified calculation.
+# done. it does not make a difference.
 
 
 

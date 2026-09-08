@@ -399,10 +399,21 @@ lstr_stack<-terra::project(lstr_stack,evapr_no)
 rm(tcdr,evapr)
 ```
 
+Before we continue on with estimating our models, we first create a spatial mask for each month that represents the valid pixels we can base the model on.
+```{r, message = FALSE, results = 'hide'}
+mask_6_no<-terra::ifel(!is.na(evapr_no) & !is.na(tcdr_no) & !is.na(lstr_stack[[1]]),1,NA)
+mask_7_no<-terra::ifel(!is.na(evapr_no) & !is.na(tcdr_no) & !is.na(lstr_stack[[2]]),1,NA)
+mask_8_no<-terra::ifel(!is.na(evapr_no) & !is.na(tcdr_no) & !is.na(lstr_stack[[3]]),1,NA)
+mask_9_no<-terra::ifel(!is.na(evapr_no) & !is.na(tcdr_no) & !is.na(lstr_stack[[4]]),1,NA)
+
+mask_stack<-c(mask_6_no,mask_7_no,mask_8_no,mask_9_no)
+rm(mask_6_no,mask_7_no,mask_8_no,mask_9_no)
+gc()
+```
+
 ## 3.3 Run regressions
 
 We loop across cities and across available months here. In each city and month we run a regression where grid cells are units of observation. Predicting LST with TCD and EVAP. We store the resulting intercepts for each city and month.
-
 ```{r, message = FALSE, results = 'hide'}
 gc()
 # months to consider
@@ -489,7 +500,7 @@ for (j in seq_along(mdr)) {
   month_df <- subset(firstdf, month == mdr[j])
     # copy polygons
   city_month <- cityb_buf
-    # attach intercepts and convert to degree celsius
+    # attach intercepts and coefficients on tcd and evap
   city_month$est_intercept <- month_df$est_intercept[
     match(city_month$LAU_NAME, month_df$city)
     ]
@@ -524,6 +535,10 @@ gamma1_stack <- rast(gamma1_rasters)
 names(intercept_stack) <- paste0("intercept_", mdr)
 names(beta1_stack) <- paste0("est_tcd_", mdr)
 names(gamma1_stack) <- paste0("est_evap_", mdr)
+# mask them based on the observed data gaps
+intercept_stack_m <- mask(intercept_stack,mask_stack)
+beta1_stack_m <- mask(beta1_stack,mask_stack)
+gamma1_stack_m <- mask(gamma1_stack,mask_stack)
 # tidy up
 rm(intercept_rasters,beta1_rasters,gamma1_rasters)
 ```
@@ -548,7 +563,7 @@ Read in a single dataframe containing weather station data. This is the training
 ```{r, message = FALSE, results = 'hide'}
 gc()
 # read in weather station data
-wstd<-read.csv(file.path(dfp,"version_2026_7",
+wstd<-read.csv(file.path(d_fp,"version_2026_7",
                            "inca_input_local_climate_regulation",
                            "Weather_station_data",
                            "StationNeighborhood2016.csv"))
@@ -590,7 +605,7 @@ $$ \widehat{T^{air}_{j,i}} = \widehat{\beta_{2}} \widehat{LST}^{med.veg}_{j,i} +
 
 Then we compute for each grid cell $i$ the expected air temperature in a no-vegetation scenario, i.e. where $\widehat{LST^{uten.veg}_{j,i}} = \widehat{\alpha_{1,j}}$ because $TCD = EVAP = 0$ in this case. So
 
-$$ \widehat{T^{air,0}_{ji}} = \widehat{\beta_{2}} \widehat{LST^{uten.veg}_{j,i}} + \widehat{\gamma_{2}} latitude_{j,i} $$.
+$$ \widehat{T^{air,0}_{ji}} = \widehat{\beta_{2}} \widehat{LST}^{uten.veg}_{j,i} + \widehat{\gamma_{2}} latitude_{j,i} $$.
 
 The cooling effect is then retrieved for each grid cell $i$ in city $j$ as
 
@@ -599,6 +614,7 @@ $$ \widehat{cooling_{j,i}} = \widehat{T^{air,0}_{ji}} - \widehat{T^{air}_{ji}}$$
 After plugging in for estimated grid-cell temperature in both secenarios with vegetation and without vegetation, the previous equation simplifies to:
 
 $$ \widehat{cooling}_{j,i} = -\widehat{\beta}_{2} * (\widehat{\beta}_{1,j}TCD_{j,i} + \widehat{\gamma}_{1,j}EVAP_{ji})$$
+This implies that we do not actually need to use the local surface temperature data rasters when computing the cooling rasters. The cooling calculation simplifies to being based on the coefficients from both first and second regressions, as well as the tree cover raster and the evapotranspiration raster. In INCA this analytical simplification step has not been taken. I have tested both versions, and can confirm they yield the same result
 
 ## 5.2 Create cooling rasters
 
@@ -615,12 +631,21 @@ lat_r <- project(lat_ll, lstr_stack[[1]])
 rm(tmp_ll,lat_ll)
 # then compute the cooling rasters in a loop across months
 # the loop
+# and also LST veg rasters
+lst_v_rasters <<- vector("list", length(mdr))
 cooling_rasters <- vector("list", length(mdr))
 cooling_rasters_nn <- vector("list", length(mdr)) # non-negative version as in INCA
 # loop across months
 for (j in seq_along(mdr)) {
   # modelled cooling
-  coolingr <- (-beta2h) * ((beta1_stack[[j]]*tcdr_no) + (gamma1_stack[[j]]*evapr_no))
+  # simple version
+  coolingr <- (-beta2h) * ((beta1_stack_m[[j]]*tcdr_no) + (gamma1_stack_m[[j]]*evapr_no))
+  # # complex version (analytically the same)
+  # # first estimated lst with vegetation
+  # lstvr <- intercept_stack_m[[j]] + beta1_stack_m[[j]]*tcdr_no + gamma1_stack_m[[j]]*evapr_no
+  # tairuv <- beta2h*intercept_stack_m[[j]] + gamma2h*lat_r
+  # tairmv <- beta2h*lstvr + gamma2h*lat_r
+  # coolingr <- tairuv - tairmv
   coolingr_nn <- coolingr
   coolingr_nn[coolingr_nn < 0] <- 0
   # save
@@ -680,7 +705,12 @@ for(j in 2){
 
 Here we now summarise the data across grid cells (and time). The final outputs are SUT tables. We compute average cooling by ecosystem type and area, and weighted average cooling across all ecosystem types by area. INCA reports the city-level results based on non-modified cooling data (where negative cooling isn't forced to zero) while the NUTS-level results are reported based on modified cooling data (negative cooling means zero cooling). So we do the same here.
 
+One inconsistency to name. The handbook specifies that the cooling effect of water ecosystems should be reported to zero (point 10.4 in chapter 10). INCA does not do this.
+
 ## 6.1 Supply tables for City LAUs in Norway
+
+In accordance with what INCA returns, we provide average cooling and median cooling by city, not disaggregated by ecosystems.
+MM to revise code.
 
 ```{r,message = FALSE, results = 'hide'}
 gc()

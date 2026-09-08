@@ -1,0 +1,12 @@
+which LST to use if several qualify? Should we compute a median (na.rm=T) across them and use the result?
+
+which evap file should we use? The one covering all months?
+
+We use DEGURBA-based city LAUs. Any other shapes recommended?
+
+LST maps have massive gaps. Interestingly we can still build cooling rasters without gaps, 
+because we only need LST files for calibration of the simulation model. INCA masks out all missing data areas.
+We do the same atm, but could in a way also create less patchy results.
+
+
+
