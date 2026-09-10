@@ -601,27 +601,27 @@ rm(wlm)
 
 Here we now apply the estimated coefficients from the previous two steps to generate simulated data. We do this for each city. 
 
-We first compute for each grid cell $i$ and month $j$ the expected air temperature $\widehat{T}^{air}_{j,i}$ given observed conditions.
+We first compute for each grid cell $i$ and month $j$ the expected air temperature $\widehat{T}^{air_{obsLSTgreen}}_{j,i}$ given observed conditions.
 
-$$ \widehat{T}^{air}_{j,i} = \widehat{\alpha}_{2} + \widehat{\beta}_{2}LST_{j,i} + \widehat{\gamma}_{2} LAT{j,i} $$.
+$$ \widehat{T}^{air_{obsLSTgreen}}_{j,i} = \widehat{\alpha}_{2} + \widehat{\beta}_{2}LST_{j,i} + \widehat{\gamma}_{2} LAT{j,i} $$.
 
 Then we compute for each grid cell $i$ and month $j$ the expected air temperature in a no-vegetation scenario, i.e. where $\widehat{LST}^{zero}_{j,i} = \widehat{\alpha}_{1,j}$ because $TCD = EVAP = 0$ in this case. So
 
-$$ \widehat{T}^{air,zero}_{j,i} = \widehat{\alpha}_{2} + \widehat{\beta}_{2} \widehat{LST}^{zero}_{j,i} + \widehat{\gamma}_{2} LAT_{j,i} $$.
+$$ \widehat{T}^{air_{simLSTgray}}_{j,i} = \widehat{\alpha}_{2} + \widehat{\beta}_{2} \widehat{LST}^{zero}_{j,i} + \widehat{\gamma}_{2} LAT_{j,i} $$.
 
-It is important to note that $\widehat{LST}^{zero}_{j,i}$ is constant for each grid cell in a city-month, because we only get one $\widehat{\alpha}_{1,j}$ for each city-month. This again implies that $\widehat{T}^{air,zero}_{j,i}$ actually only varies across the north-south dimension due to varying latitude. The cooling effect is then retrieved for each grid cell $i$ in city $j$ as
+It is important to note that $\widehat{LST}^{zero}_{j,i}$ is constant for each grid cell in a city-month, because we only get one $\widehat{\alpha}_{1,j}$ for each city-month. This again implies that $\widehat{T}^{air_{simLSTgray}}_{j,i}$ actually only varies across the north-south dimension due to varying latitude. The cooling effect is then retrieved for each grid cell $i$ in city $j$ as
 
-$$ \widehat{cooling_{j,i}} = \widehat{T}^{air,zero}_{j,i} - \widehat{T}^{air}_{j,i}$$.
+$$ \widehat{cooling_{j,i}} = \widehat{T}^{air_{simLSTgray}}_{j,i} - \widehat{T}^{air_{obsLSTgreen}}_{j,i}$$.
 
 Bear in mind that latitude cancels out here, so we are effectively substracting a constant no-vegetation counterfactual from the simulated varying air temperature with vegetation. After plugging in for estimated grid-cell temperature in both secenarios with vegetation and without vegetation, the previous equation simplifies to:
 
 $$ \widehat{cooling}_{j,i} = -\widehat{\beta}_{2} * (LST_{j,i} + \widehat{\alpha}_{1,j})$$
 
-As the formulation shows, cooling results from the estimated intercept of the first regression, the estimated coefficient on local surface temperature from the second regression, and the observed local surface temperature data.
+As the formulation shows, cooling is a function of the estimated intercept of the first regression, the estimated coefficient on local surface temperature from the second regression, and the observed local surface temperature data.
 
 ## 5.2 Compute cooling due to vegetation by city
 
-Make a loop where we compute the cooling for each city in each month. Based on the method, it is possible to get positive and negative cooling values for pixels. The guidance says nothing about that, but the python script behind INCA reveals that negative cooling values are forced to zero (line 512 in the python script "__init___.py"), before they are aggregated. So what we do is to create two versions, one with negative values removed, one that keeps negative values. 
+Make a loop where we compute the cooling for each city in each month. Based on the method, it is possible to get positive and negative cooling values for pixels. The guidance says nothing about that.
 ```{r,message = FALSE, results = 'hide'}
 gc()
 
@@ -676,109 +676,101 @@ Here is the resulting table
 kable(cooldf %>% mutate(across(where(is.numeric), ~ round(.x, 2))))
 ```
 
-Comparing these results with INCA outputs shows that we replicate the process quite closely, but not perfectly. For July, the differences between average cooling from this script and the INCA process vary between 0.003 deg.C for Bergen and 0.09 deg.C for Bærum. For the same month, the differences between median cooling from this script and the INCA process vary between 0.001 deg.C for Bergen and 0.09 deg.C for Bærum.
+Comparing these results with INCA outputs shows that we replicate the process quite closely, but not perfectly. I guess that differences mainly come from different geospatial projections. For July, the differences between average cooling from this script and the INCA process vary between 0.003 deg.C for Bergen and 0.09 deg.C for Bærum. For the same month, the differences between median cooling from this script and the INCA process vary between 0.001 deg.C for Bergen and 0.09 deg.C for Bærum.
 
 # 6. Compute results by NUTS and ecosystem
 
 ## 6.1 Overview
 
-Here we now create results for larger regions and by ecosystem. In INCA this computation is implemented differently than the city-statistics (for whatever reason...). So here, INCA creates the air temperature data NOT based on observed LST data, but on estimated LST data. Thinking about it, this approach makes more sense than the one used for the city statistics, because it reduces the potential for bias in the results (we compare modelled LST to modelled LST, rather than modelled LST to observed LST). Analytically, this changes what the result is based on.
+Here we now create results for larger regions and by ecosystem. In INCA this computation is implemented differently than the city-statistics (the rationale behind the differences is unclear to me). So here, INCA creates the air temperature data NOT based on observed LST data, but on estimated LST data. Thinking about it, this approach makes more sense than the one used for the city statistics, because it reduces the potential for bias in the results (we compare modelled LST to modelled LST, rather than modelled LST to observed LST). Analytically, this changes what the result is based on, as I'll show in the next equations.
 
 We first need to construct predicted land surface temperature $\widehat{LST}_{j,i}$ for each grid cell $i$ and month $j$ with our calibrated model coefficients and observed inputs for the right hand side.
 
 $$ \widehat{LST}_{j,i} = \widehat{\alpha}_{1,j} + \widehat{\beta}_{1,j}TCD_{j,i} + \widehat{\gamma}_{1,j}EVAP_{ji}$$
 
-Then we compute for each grid cell $i$ and month $j$ the expected air temperature $\widehat{T}^{air}_{j,i}$ given observed conditions.
+Then we compute for each grid cell $i$ and month $j$ the expected air temperature $\widehat{T}^{air_{simLSTgreen}}_{j,i}$ given simulated conditions.
 
-$$ \widehat{T}^{air}_{j,i} = \widehat{\alpha}_{2} + \widehat{\beta}_{2} \widehat{LST}_{j,i} + \widehat{\gamma}_{2} LAT{j,i} $$.
+$$ \widehat{T}^{air_{simLSTgreen}}_{j,i} = \widehat{\alpha}_{2} + \widehat{\beta}_{2} \widehat{LST}_{j,i} + \widehat{\gamma}_{2} LAT{j,i} $$.
 
 Then we compute for each grid cell $i$ and month $j$ the expected air temperature in a no-vegetation scenario, i.e. where $\widehat{LST}^{zero}_{j,i} = \widehat{\alpha}_{1,j}$ because $TCD = EVAP = 0$ in this case. So
 
-$$ \widehat{T}^{air,zero}_{j,i} = \widehat{\alpha}_{2} + \widehat{\beta}_{2} \widehat{LST}^{zero}_{j,i} + \widehat{\gamma}_{2} LAT_{j,i} $$.
+$$ \widehat{T}^{air_{simLSTgray}}_{j,i} = \widehat{\alpha}_{2} + \widehat{\beta}_{2} \widehat{LST}^{zero}_{j,i} + \widehat{\gamma}_{2} LAT_{j,i} $$.
 
 It is important to note that $\widehat{LST}^{zero}_{j,i}$ is constant for each grid cell in a city-month, because we only get one $\widehat{\alpha}_{1,j}$ for each city-month. This again implies that $\widehat{T}^{air,zero}_{j,i}$ actually only varies across the north-south dimension due to varying latitude. The cooling effect is then retrieved for each grid cell $i$ in city $j$ as
 
-$$ \widehat{cooling_{j,i}} = \widehat{T}^{air,zero}_{j,i} - \widehat{T}^{air}_{j,i}$$.
+$$ \widehat{cooling_{j,i}} = \widehat{T}^{air_{simLSTgray}}_{j,i} - \widehat{T}^{air_{simLSTgreen}}_{j,i}$$.
 
-Bear in mind that latitude cancels out here, so we are effectively substracting a constant no-vegetation counterfactual from the simulated varying air temperature with vegetation. After plugging in for estimated grid-cell temperature in both secenarios with vegetation and without vegetation, the previous equation simplifies to:
+Bear in mind that latitude cancels out here, so we are effectively subtracting a constant no-vegetation counterfactual from the simulated varying air temperature with vegetation. After plugging in for estimated grid-cell temperature in both secenarios with vegetation and without vegetation, the previous equation simplifies to:
 
 $$ \widehat{cooling}_{j,i} = -\widehat{\beta}_{2} * (\widehat{\beta}_{1,j}TCD_{j,i} + \widehat{\gamma}_{1,j}EVAP_{j,i})$$
 
-This implies that we do not actually need to use the local surface temperature data rasters when computing the cooling rasters based on fully simulated data. The cooling calculation simplifies to being based on the coefficients from both first and second regressions, as well as the tree cover raster and the evapotranspiration raster. In INCA this analytical simplification step has not been made use of.
+As you can see, cooling is now a function of slightly different inputs than what it was for the city-cooling computation. It implies that we do not actually need to use the local surface temperature data rasters when computing the cooling rasters based on fully simulated data. The cooling calculation simplifies to being based on the coefficients from both first and second regressions, as well as the tree cover raster and the evapotranspiration raster. In INCA this analytical simplification step has not been made use of.
 
-We then create cooling rasters, which we can use to summarise cooling by area and ecosystems. INCA reports the city-level results based on non-modified cooling data (where negative cooling isn't forced to zero) while the NUTS-level results are reported based on modified cooling data (negative cooling means zero cooling). So we do the same here, and acknowledge that this is a further reason for inconsistency between the city-level and the region-level estimates.
+We then create cooling rasters, which we can use to summarise cooling by area and ecosystems. INCA reports the city-level results based on non-modified cooling data (where negative cooling isn't forced to zero) while the NUTS-level results are reported based on modified cooling data (negative cooling means zero cooling, see line 512 in the python script "__init___.py"). So we do the same here, and acknowledge that this is a further reason for inconsistency between the city-level and the region-level estimates.
 
-Another inconsistency to name: The handbook specifies that the cooling effect of water ecosystems should be reported to zero (point 10.4 in chapter 10). INCA does not do this. We stick to what INCA reports, for now.
+Another inconsistency to name: The handbook specifies that the cooling effect of water ecosystems should be reported to zero (point 10.4 in chapter 10). INCA does not do this. We stick to what INCA does, for now.
+
+And another inconsistency: The regression coefficients and city-cooling results are based on a data population that is NA for all pixels where at least one of the input data rasters (LST, TCD, EVAP) is NA. The big gaps in the LST data therefore imply that the results are valid only for a small subset of the city areas in some cities. Now in the calculation of regional results and by ecosystem, because the computation uses simulated LST instead of observed LST, the data population is larger. It does not inherit the LST data gaps. This risks creating a false precision, because for some of the areas, the simulations are informed by only a very small, and possibly unrepresentative subset of the actual area.
+
+And a final methodological concern: Due to the 150m buffers around cities, the shapes of individual cities that are located next to each other (e.g. Oslo, Lørenskog and Rælingen) actually overlap. In my view, the regional statistics should ideally be based on modified shapes without overlaps. So that the overlaps do not create weird average values for border regions. INCA, however, does not take explicit care of this problem. For the time being, we follow INCA in our current implementation in that we apply average cooling values for the overlapping areas.
 
 ## 6.2 Compute cooling rasters
 
-So here we compute cooling rasters based on the method described in the previous section. An important caveat is that cities in our shapefile overlap, due to the 150m buffer implemented around them. In INCA this problem is not explicitly taken care of, so that cooling in border areas is 
+So here we compute cooling rasters based on the method described in the previous section. An important caveat is that cities in our shapefile overlap, due to the 150m buffer implemented around them. In INCA this problem is not explicitly taken care of, so that cooling in border areas is the average of the cooling of the two bordering cities shapes.
 
 ```{r,message = FALSE, results = 'hide'}
 gc()
-### Make a function and then run for each month
-cooling_by_city<-function(j){
-  df_sut<-as.data.frame(matrix(ncol=14,nrow=nrow(cityb_buf)))
-  colnames(df_sut)<-c("LAU",estv,"w_avg_cool")
-  # now loop across LAU
+### We run this as a loop across months and cities. Following INCA's python implementation as close as possible
+cooling_list_m <- vector("list", length(mdr))
+for(j in 1:length(mdr)){
+  # make a list for the city-wise cooling rasters
+  cooling_list <- vector("list", nrow(cityb_buf))
   for(i in 1:nrow(cityb_buf)){
-  # the LAU name
-  df_sut$LAU[i]<-as.data.frame(cityb_buf[i,])$LAU_NAME
-  # compute cooling averages
-  # using terra zonal
-  z <- terra::zonal(mask(crop(cooling_stack[[j]], cityb_buf[i,]),cityb_buf[i,]), # values
-                    mask(crop(lcm2, cityb_buf[i,]),cityb_buf[i,]),# categories
-                    fun="mean",
-                    na.rm=T)
-  # create city-masked cooling raster
-  cool <- mask(crop(cooling_stack[[j]], cityb_buf[i,]), cityb_buf[i,])
-  # mask the lcm for the city cooling (to exclude cells that are NA in cooling)
-  lcm_city <- mask(crop(lcm2, cityb_buf[i,]), cityb_buf[i,])
-  cool_lcm <- mask(lcm_city, cool)
-  # set column names
-  colnames(z) <- c("es_id","cooling")
-  # add ecosystem names
-  z$es_name <- lcm_idf$es_type[
-  match(z$es_id, lcm_idf$es_id)]
-  # here is the weighted cooling across all ecosystems
-  dfp<-freq(cool_lcm)
-  dfp['es_weight']<-dfp$count / dfp %>% select(count) %>% sum()
-  z <- z %>% left_join(dfp,by=join_by("es_id" == "value"))
-  z['weighted_average_cooling']<-z$cooling*z$es_weight
-  rm(dfp,cool,lcm_city,cool_lcm)
-  # paste result into our table, loop again, just to ensure we keep empty values where ecosystems do not exist
-  for(k in 1:length(estv)){
-    df_sut[i,k+1]<- {
-      x <- z %>% filter(es_name==estv[k]) %>% pull(cooling)
-      if(length(x) == 0) NA else x
-    }
-    rm(x)
+    # get coefficients
+    alpha1h_ <- firstdf$est_intercept[firstdf$month==mdr[j] & firstdf$city==cityb_buf$LAU_NAME[i]]
+    beta1h_ <- firstdf$est_tcd[firstdf$month==mdr[j] & firstdf$city==cityb_buf$LAU_NAME[i]]
+    gamma1h_ <- firstdf$est_evap[firstdf$month==mdr[j] & firstdf$city==cityb_buf$LAU_NAME[i]]
+    # create simulated lst rasters
+    lst_sim_green_ <- alpha1h_ + beta1h_*crop(tcdr_no,cityb_buf[i,],mask=T) + gamma1h_*crop(evapr_no,cityb_buf[i,],mask=T)
+    lst_sim_gray_ <- alpha1h_ + 0*crop(tcdr_no,cityb_buf[i,],mask=T) + 0*crop(evapr_no,cityb_buf[i,],mask=T)
+    # create simulated air temp rasters
+    t_air_green_ <- alpha2h + beta2h*lst_sim_green_ + gamma2h*crop(lat_r,cityb_buf[i,],mask=T)
+    t_air_gray_ <- alpha2h + beta2h*lst_sim_gray_ + gamma2h*crop(lat_r,cityb_buf[i,],mask=T)
+    # cooling
+    cooling_ <- t_air_gray_ - t_air_green_
+    # as in INCA we force negative values to be zero
+    cooling_[cooling_<0] <- 0
+    # save in stack
+    cooling_list[[i]]<-cooling_
+    # tidy up
+    rm(alpha1h_,beta1h_,gamma1h_,lst_sim_gray_,lst_sim_green_,t_air_gray_,t_air_green_,cooling_)
   }
-  # finally the weighted average for the LAU as a whole
-  df_sut$w_avg_cool[i]<-sum(z$weighted_average_cooling)
-  rm(z)
-  }
-#return result
-return(df_sut)
+  # in this function now we put the cities together and impose the mean cooling for the overlapping boundaries
+  cooling_list_m[[j]] <- do.call(terra::mosaic,c(cooling_list,fun=mean))
+  # save
+  writeRaster(cooling_list_m[[j]],file.path(rfp,paste0("cooling_",j,".tif")),overwrite=T)
 }
-
-# then run
-city_st_6 <- cooling_by_city(j=1)
-city_st_7 <- cooling_by_city(j=2)
-city_st_8 <- cooling_by_city(j=3)
-city_st_9 <- cooling_by_city(j=4)
+cooling_stack<-terra::rast(cooling_list_m)
+names(cooling_stack)<-mdr
+rm(cooling_list_m)
 ```
 
-Here are the results for June (rounded)
-
-```{r}
-kable(city_st_6 %>% mutate(across(where(is.numeric), ~ round(.x, 2))))
+Here are the plots for June
+```{r,message = FALSE, results = 'hide', fig.height = 9}
+j=1
+for(i in 1:nrow(cityb_buf)){
+  plot(crop(cooling_stack[[j]], cityb_buf[i,],mask=T),main=paste(cityb_buf$LAU_NAME[i],"cooling","month",mdr[j]), legend=T)
+  plot(roads_list[[i]],add=T)
+}
 ```
 
-Here are the results for July (rounded to two digits)
-
-```{r}
-kable(city_st_7 %>% mutate(across(where(is.numeric), ~ round(.x, 2))))
+Here are the plots for July
+```{r,message = FALSE, results = 'hide', fig.height = 9}
+j=2
+for(i in 1:nrow(cityb_buf)){
+  plot(crop(cooling_stack[[j]], cityb_buf[i,],mask=T),main=paste(cityb_buf$LAU_NAME[i],"cooling","month",mdr[j]), legend=T)
+  plot(roads_list[[i]],add=T)
+}
 ```
 
 ## 6.3 Supply tables by NUTS2 and 0 in Norway

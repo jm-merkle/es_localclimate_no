@@ -1,52 +1,22 @@
 
 
-# build a new function to compute what we want
+# now cooling by nuts and ecosystem
 
 gc()
+# Import Norway NUTs2 shape
+n2shp<-terra::vect(file.path(d_fp,"Norway_files","NUTS2021_NO_LVL2_wosvalbard","NUTS2021_NO_LVL2_wos.shp"))
+n2shp <- project(n2shp,crs(lcm))
 
-# make a dataframe from firstdf
-cooldf<-firstdf %>% select(month,city,city_code,pixels_in_shp,p_pixels_used)
-cooldf['T_air_sim']<-NA
-cooldf['T_air_zero_sim']<-NA
-cooldf['average_cooling']<-NA
-cooldf['median_cooling']<-NA
-
-# Project raster to geographic coordinates
-tmp_ll <- project(lstr_stack[[1]], "EPSG:4326")
-# Create latitude raster
-lat_ll <- init(tmp_ll, "y")
-# Back to the original grid
-lat_r <- project(lat_ll, lstr_stack[[1]])
-rm(tmp_ll,lat_ll)
+n2shp$NUTS_ID
 
 
-for(j in 1:length(mdr)){
-  for(i in 1:nrow(cityb_buf)){
-    # Step 1: Move spatial data into dataframe
-    estack <- c(
-      crop(lstr_stack[[j]], cityb_buf[i,], mask = TRUE),
-      crop(tcdr_no, cityb_buf[i,], mask = TRUE),
-      crop(evapr_no, cityb_buf[i,], mask = TRUE),
-      crop(lat_r, cityb_buf[i,], mask = TRUE))
-    names(estack)<-c("lst","tcd","evap","lat")
-    cmdf<-as.data.frame(estack) %>% drop_na()
-    # Step 2: Fill
-    cmdf['alpha1h'] <- firstdf %>% filter(month==mdr[j] & city==cityb_buf$LAU_NAME[i]) %>% select(est_intercept)
-    cmdf['beta1h'] <- firstdf %>% filter(month==mdr[j] & city==cityb_buf$LAU_NAME[i]) %>% select(est_tcd)
-    cmdf['gamma1h'] <- firstdf %>% filter(month==mdr[j] & city==cityb_buf$LAU_NAME[i]) %>% select(est_evap)
-    #cmdf['lst_h'] <-  cmdf$alpha1h + (cmdf$tcd*cmdf$beta1h) + (cmdf$evap*cmdf$gamma1h)
-    cmdf['t_air_h'] <- alpha2h + (cmdf$lst*beta2h) + (cmdf$lat*gamma2h)
-    cmdf['t_air_zero_h'] <- alpha2h + (cmdf$alpha1h*beta2h) + (cmdf$lat*gamma2h)
-    cmdf['cool'] <- cmdf$t_air_zero_h - cmdf$t_air_h
-    # Step 3: Move into cooldf
-    cooldf$T_air_sim[cooldf$month==mdr[j] & cooldf$city==cityb_buf$LAU_NAME[i]] <- mean(cmdf$t_air_h)
-    cooldf$T_air_zero_sim[cooldf$month==mdr[j] & cooldf$city==cityb_buf$LAU_NAME[i]] <- mean(cmdf$t_air_zero_h)
-    cooldf$average_cooling[cooldf$month==mdr[j] & cooldf$city==cityb_buf$LAU_NAME[i]] <- mean(cmdf$cool)
-    cooldf$median_cooling[cooldf$month==mdr[j] & cooldf$city==cityb_buf$LAU_NAME[i]] <- median(cmdf$cool)
-    # Step 4: Clean up
-    rm(estack,cmdf)
-  }
-}
+
+plot(n2shp)
+
+# rasterize the shape
+n2r_no <- terra::rasterize(n2shp,mask_stack,field="NUTS_ID")
+
+plot(n2r_no)
 
 
 
@@ -59,6 +29,54 @@ for(j in 1:length(mdr)){
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#################################################################################
+
+alpha1hr_7 <- terra::rasterize(cityb_buf_7,mask_stack[[j]],field="est_intercept",fun=mean)
+beta1hr_7 <- terra::rasterize(cityb_buf_7,mask_stack[[j]],field="est_tcd",fun=mean)
+gamma1hr_7 <- terra::rasterize(cityb_buf_7,mask_stack[[j]],field="est_evap",fun=mean)
+
+lst_sim_green_7 <- alpha1hr_7 + beta1hr_7*tcdr_no + gamma1hr_7*evapr_no
+lst_sim_gray_7 <- alpha1hr_7 
+
+t_air_green_7 <- alpha2h + beta2h*lst_sim_green_7 + gamma2h*lat_r
+t_air_gray_7 <- alpha2h + beta2h*lst_sim_gray_7 + gamma2h*lat_r
+
+cooling_7 <- t_air_gray_7 - t_air_green_7
+plot(cooling_7)
+cooling_nn_7 <- cooling_7
+cooling_nn_7[cooling_nn_7<0]<-0
+
+plot(cooling_nn_7)
+
+plot(crop(cooling_nn_7,cityb[8,],mask=T))
 
 ################################################################################
 j=2
