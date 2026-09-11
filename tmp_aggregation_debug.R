@@ -35,16 +35,61 @@ astack <- c(
   cooling_stack[[j]],
   n2r_no,
   lcm2)
-names(astack)<-c("cooling","city","lcm")
+names(astack)<-c("cooling","region","lcm")
 adf<-as.data.frame(astack)
 clean_adf <- adf %>% drop_na()
 
-# mean by ES type
-mean_by_city_es <- clean_adf %>% group_by(city,lcm) %>% summarise(cooling = mean(cooling))
+# all means we want
 
-mean_by_city <- clean_adf %>% group_by(city) %>% summarise(cooling = mean(cooling))
+# means by region and ecosystem type
+mean_by_region_es <- clean_adf %>% 
+  group_by(region,lcm) %>% 
+  summarise(cooling = mean(cooling))
+mean_by_es <- clean_adf %>% 
+  select(-region) %>% 
+  group_by(lcm) %>% 
+  summarise(cooling = mean(cooling)) %>%
+  mutate(region = "NO") %>%
+  relocate(region,.before=lcm)
+# total means by NUTS2
+mean_by_region <- clean_adf %>% 
+  group_by(region) %>% 
+  summarise(cooling = mean(cooling)) %>% 
+  mutate(lcm="All") %>%
+  relocate(lcm,.after=region)
+# total mean for the whole country NUTS0
+mean_overall <- clean_adf %>% select(cooling) %>% 
+  summarise(cooling=mean(cooling)) %>%
+  mutate(region = "NO",lcm = "All") %>%
+  relocate(cooling,.after =lcm)
+# put together
+mean_vals <- rbind(mean_by_es,mean_overall,mean_by_region_es,mean_by_region) %>% 
+  filter(region !="NO09") %>% 
+  pivot_wider(names_from=lcm,values_from = cooling) %>%
+  left_join(n2shp %>% as.data.frame() %>% select(NUTS_ID,NUTS_NAME),
+            by = join_by(region == NUTS_ID)) %>%
+  rename(Name = NUTS_NAME) %>%
+  relocate(Name,.after=region) %>%
+  rename(Region = region)
+mean_vals$Name[mean_vals$Region=="NO"]<-"Norge"
+# tidy up
+rm(mean_overall,mean_by_region,mean_by_es,mean_by_region_es)
 
-# why is nuts area 09 in there?
+
+
+################################################################################
+# now a dataframe
+
+supplydf<-as.data.frame()
+
+
+
+
+
+
+
+
+################################################################################
 
 plot(n2r_no)
 plot(cooling_stack[[j]],add=T,legend=F)

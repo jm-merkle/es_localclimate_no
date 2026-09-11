@@ -146,7 +146,7 @@ rm(dfs)
 
 ## 3.1 Overview
 
-In this first step we use gridded data to estimate a linear model of local surface temperature (LST) predicted by tree cover density (TCD) and evaporation. We estimate this model for each city, so it requires that our gridded data is cropped to city boundaries plus a buffer of 150 metres (as specified in Eurostat's handbook). The model is: $$ LST_{j} = \alpha_{1,j} + \beta_{1} TCD + \gamma_{1} EVAP $$ For each city, we save the estimated intercept of the linear model $\widehat{\alpha_{1,j}}$, which is equal to the LST in a scenario with no trees and evaporation. This is a purely hypothetical number with no interpretative value. It is needed as an intermediate step.
+In this first step we use gridded data to estimate a linear model of local surface temperature (LST) predicted by tree cover density (TCD) and evaporation. We estimate this model for each city, so it requires that our gridded data is cropped to city boundaries plus a buffer of 150 metres (as specified in Eurostat's handbook). The model is: $$ LST_{j} = \alpha_{1,j} + \beta_{1} TCD + \gamma_{1} EVAP $$ For each city, we save the estimated coefficients of the linear model.
 
 ## 3.2 Import data
 
@@ -256,9 +256,9 @@ for(i in 1:nrow(cityb_buf)){
 }
 ```
 
-Now next we need to identify which of these cities have experienced maximum daily temperatures of at least 25 degrees celsius in the reference year of 2024. For this purpose we first download and import Norwegian meteorological data for 2024 covering the four cities. For now I have eyeballed which weathers stations fit in which city. Given that we observe maximum temperatures of at least 25 degrees celsius in all of them, it does not really matter, the precise selection of weather stations does not really matter. Below we print the weather stations and months in which there where temperatures above 25 deg C.
+Now next we need to identify which of these cities have experienced maximum daily temperatures of at least 25 degrees celsius in the reference year of 2024. For this purpose we first download and import Norwegian meteorological data for 2024 covering the four cities. For now I have eyeballed which weathers stations fit in which city. Given that we observe maximum temperatures of at least 25 degrees celsius in all of them, the precise selection of weather stations does not really matter.
 
-```{r,message = FALSE, results = 'hide'}
+```{r,message = FALSE, results='hide'}
 gc()
 # read in meteorogogical data for stations inside the above city LAUs for 2024 -
 tempd <- read.csv(file.path(here::here(),"ancillary_data",
@@ -490,67 +490,15 @@ firstdf <- firstdf %>%
   relocate(city_code,.after=city)
 #clean up
 rm(reg1df,rl)
-
-# # save coefficients in raster stacks
-## MM this induces problems because of overlapping city boundaries (after buffering them with 150m)
-# # one raster per month
-# intercept_rasters <- vector("list", length(mdr))
-# beta1_rasters <- vector("list", length(mdr))
-# gamma1_rasters <- vector("list", length(mdr))
-# # loop across months
-# for (j in seq_along(mdr)) {
-#     # subset results for current month
-#   month_df <- subset(firstdf, month == mdr[j])
-#     # copy polygons
-#   city_month <- cityb_buf
-#     # attach intercepts and coefficients on tcd and evap
-#   city_month$est_intercept <- month_df$est_intercept[
-#     match(city_month$LAU_NAME, month_df$city)
-#     ]
-#   city_month$est_tcd <- month_df$est_tcd[
-#     match(city_month$LAU_NAME, month_df$city)
-#     ]
-#   city_month$est_evap <- month_df$est_evap[
-#     match(city_month$LAU_NAME, month_df$city)
-#     ]
-#     # rasterize
-#   intercept_rasters[[j]] <- terra::rasterize(
-#     city_month,
-#     lstr_stack[[1]], # as a template
-#     field = "est_intercept"
-#   )
-#   beta1_rasters[[j]] <- terra::rasterize(
-#     city_month,
-#     lstr_stack[[1]], # as a template
-#     field = "est_tcd"
-#   )
-#   gamma1_rasters[[j]] <- terra::rasterize(
-#     city_month,
-#     lstr_stack[[1]], # as a template
-#     field = "est_evap"
-#   )
-#   rm(city_month,month_df)
-# }
-# # create SpatRaster stack
-# intercept_stack <- rast(intercept_rasters)
-# beta1_stack <- rast(beta1_rasters)
-# gamma1_stack <- rast(gamma1_rasters)
-# names(intercept_stack) <- paste0("intercept_", mdr)
-# names(beta1_stack) <- paste0("est_tcd_", mdr)
-# names(gamma1_stack) <- paste0("est_evap_", mdr)
-# # mask them based on the observed data gaps
-# intercept_stack_m <- mask(intercept_stack,mask_stack)
-# beta1_stack_m <- mask(beta1_stack,mask_stack)
-# gamma1_stack_m <- mask(gamma1_stack,mask_stack)
-# # tidy up
-# rm(intercept_rasters,beta1_rasters,gamma1_rasters)
 ```
 
-Print the table, with rounded values.
-
+Print the table, with rounded values (and some less interesting rows and columns removed).
 ```{r}
 # print result table
-kable(firstdf %>% mutate(across(where(is.numeric), ~ round(.x, 2))))
+kable(firstdf %>% 
+        filter(month %in% c(6,7)) %>%
+        select(-c(p_pixels_rm,p_pixels_rm_due_na_lcm,p_pixels_rm_due_na_data)) %>%
+        mutate(across(where(is.numeric), ~ round(.x, 2))))
 ```
 
 # 4. Estimate a Model of Air Temperature
@@ -670,10 +618,10 @@ for(j in 1:length(mdr)){
 }
 ```
 
-Here is the resulting table
+Here is the resulting table (I only show June and July here, to make results easier to digest)
 ```{r}
 # print result table
-kable(cooldf %>% mutate(across(where(is.numeric), ~ round(.x, 2))))
+kable(cooldf %>% filter(month %in% c(6,7)) %>% mutate(across(where(is.numeric), ~ round(.x, 2))))
 ```
 
 Comparing these results with INCA outputs shows that we replicate the process quite closely, but not perfectly. I guess that differences mainly come from different geospatial projections. For July, the differences between average cooling from this script and the INCA process vary between 0.003 deg.C for Bergen and 0.09 deg.C for Bærum. For the same month, the differences between median cooling from this script and the INCA process vary between 0.001 deg.C for Bergen and 0.09 deg.C for Bærum.
@@ -682,7 +630,7 @@ Comparing these results with INCA outputs shows that we replicate the process qu
 
 ## 6.1 Overview
 
-Here we now create results for larger regions and by ecosystem. In INCA this computation is implemented differently than the city-statistics (the rationale behind the differences is unclear to me). So here, INCA creates the air temperature data NOT based on observed LST data, but on estimated LST data. Thinking about it, this approach makes more sense than the one used for the city statistics, because it reduces the potential for bias in the results (we compare modelled LST to modelled LST, rather than modelled LST to observed LST). Analytically, this changes what the result is based on, as I'll show in the next equations.
+Here we now create results for larger regions and by ecosystem. In INCA this computation is implemented differently than the city-statistics (the rationale behind using different methods for different area extents is unclear to me). So here, INCA creates the air temperature data NOT based on observed LST data, but on estimated LST data. Thinking about it, this approach makes more sense than the one used for the city statistics, because it reduces the potential for bias in the results (we compare modelled LST to modelled LST, rather than modelled LST to observed LST). Analytically, this changes what the result is based on, as I'll show in the next equations.
 
 We first need to construct predicted land surface temperature $\widehat{LST}_{j,i}$ for each grid cell $i$ and month $j$ with our calibrated model coefficients and observed inputs for the right hand side.
 
@@ -714,9 +662,11 @@ And another inconsistency: The regression coefficients and city-cooling results 
 
 And a final methodological concern: Due to the 150m buffers around cities, the shapes of individual cities that are located next to each other (e.g. Oslo, Lørenskog and Rælingen) actually overlap. In my view, the regional statistics should ideally be based on modified shapes without overlaps. So that the overlaps do not create weird average values for border regions. INCA, however, does not take explicit care of this problem. For the time being, we follow INCA in our current implementation in that we apply average cooling values for the overlapping areas.
 
+Add more text: main concern that INCA code to create cooling rasters may be completely wrong.
+
 ## 6.2 Compute cooling rasters
 
-So here we compute cooling rasters based on the method described in the previous section. An important caveat is that cities in our shapefile overlap, due to the 150m buffer implemented around them. In INCA this problem is not explicitly taken care of, so that cooling in border areas is the average of the cooling of the two bordering cities shapes.
+So here we compute cooling rasters based on the method described in the previous section. This we implement as closely as possible to INCA, but without inheriting the bug about wrong coefficients.
 
 ```{r,message = FALSE, results = 'hide'}
 gc()
@@ -775,156 +725,107 @@ for(i in 1:nrow(cityb_buf)){
 
 ## 6.3 Supply tables by NUTS2 and 0 in Norway
 
+So here now we aggregate the cooling rasters by NUTS2 area, NUTS0 area, and ecosystem type. The 150m buffers imply that NUTS2 areas that do not include city LAUs but that do border city LAUs do include cooling pixels. INCA does not address this problem. We should set those cases to zero.
+
 ```{r,message = FALSE, results = 'hide'}
+gc()
+# now cooling by nuts and ecosystem
 gc()
 # Import Norway NUTs2 shape
 n2shp<-terra::vect(file.path(d_fp,"Norway_files","NUTS2021_NO_LVL2_wosvalbard","NUTS2021_NO_LVL2_wos.shp"))
 n2shp <- project(n2shp,crs(lcm))
-
-# make a function
-cooling_by_nuts<-function(j){
-  df_sut<-as.data.frame(matrix(ncol=14,nrow=nrow(n2shp)))
-  colnames(df_sut)<-c("Region",estv,"w_avg_cool")
-  # now loop across NUTS2
-  for (i in 1:nrow(n2shp)){
-  # the NUTS name
-  df_sut$Region[i]<-as.data.frame(n2shp[i,])$NUTS_ID
-  # compute cooling averages
-  # using terra zonal
-  if(df_sut$Region[i]!="NO07"){ # if not nord norge (for which we do not have any data)
-    z <- terra::zonal(mask(crop(cooling_nn_stack[[j]], n2shp[i,]),n2shp[i,]), # values
-                      mask(crop(lcm2, n2shp[i,]),n2shp[i,]),# categories
-                      fun="mean",
-                      na.rm=T)
-    # create a mask for cities within the shape
-    n2_city_buf<-mask(crop(cityb_buf,n2shp[i,]),n2shp[i,])
-    #create region-masked cooling raster
-    cool <- mask(crop(cooling_nn_stack[[j]], n2_city_buf), n2_city_buf)
-    # mask the lcm for the city cooling (to exclude cells that are NA in cooling)
-    lcm_nuts <- mask(crop(lcm2, n2_city_buf), n2_city_buf)
-    cool_lcm <- mask(lcm_nuts, cool)
-    # set column names
-    colnames(z) <- c("es_id","cooling")
-    # add ecosystem names
-    z$es_name <- lcm_idf$es_type[
-      match(z$es_id, lcm_idf$es_id)]
-    # if there is any cooling in the shape
-    if(any(!is.na(z$cooling))){
-      dfp<-freq(cool_lcm)
-      dfp['es_weight']<-dfp$count / dfp %>% select(count) %>% sum()
-      z <- z %>% left_join(dfp,by=join_by("es_id" == "value"))
-      z['weighted_average_cooling']<-z$cooling*z$es_weight
-      rm(dfp)
-      # paste result into our table, loop again, just to ensure we keep empty values where ecosystems do not exist
-      for(k in 1:length(estv)){
-        df_sut[i,k+1]<- {
-          x <- z %>% filter(es_name==estv[k]) %>% pull(cooling)
-          if(length(x) == 0) NA else x
-        }
-        rm(x)
-      }
-      # finally the weighted average for the LAU as a whole
-      df_sut$w_avg_cool[i]<-sum(z$weighted_average_cooling,na.rm=T)
-      rm(z,n2_city_buf,cool,cool_lcm)
-    }
-  }
-  }
-  # now the process for all of norway (MM TO REVISE SIMILAR AS ABOVE)
-  df_sut<-rbind(df_sut,c("NO",rep(NA,13)))
-  z <- terra::zonal(mask(crop(cooling_nn_stack[[j]], n2shp),n2shp), # values
-                  mask(crop(lcm2, n2shp),n2shp),# categories
-                  fun="mean",
-                  na.rm=T)
-  # set column names
-  colnames(z) <- c("es_id","cooling")
-  # add ecosystem names
-  z$es_name <- lcm_idf$es_type[
-  match(z$es_id, lcm_idf$es_id)]
-  # if there is any cooling in the shape
-  if(any(!is.na(z$cooling))){
-  # we first need to cut out the right city LAUs
-  dfp<-freq(mask(crop(lcm2, cityb_buf),cityb_buf))
-  dfp['es_weight']<-dfp$count / freq(mask(crop(lcm2, cityb_buf),cityb_buf)) %>% select(count) %>% sum()
-  z <- z %>% left_join(dfp,by=join_by("es_id" == "value"))
-  z['weighted_average_cooling']<-z$cooling*z$es_weight
-  rm(dfp)
-  # paste result into our table, loop again, just to ensure we keep empty values where ecosystems do not exist
-  for(k in 1:length(estv)){
-    df_sut[which(df_sut$Region=="NO"),k+1]<- {
-      x <- z %>% filter(es_name==estv[k]) %>% pull(cooling)
-      if(length(x) == 0) NA else x
-    }
-    rm(x)
-  }
-  # finally the weighted average for the LAU as a whole
-  df_sut$w_avg_cool[df_sut$Region=="NO"]<-sum(z$weighted_average_cooling,na.rm=T)
-  rm(z)
-  }
-  # turn all columns but the first into numeric and return results
-  df_sut <- df_sut %>% mutate(across(-1, as.numeric))
-  return(df_sut)
+# rasterize the shape
+n2r_no <- terra::rasterize(n2shp,mask_stack,field="NUTS_ID")
+# then we need lcm, make sure it is aligned with the rest of the raster data
+lcm2 <- resample(lcm,mask_stack,method='near')
+# now make a loop across months
+stl<-list()
+for(j in 1:length(mdr)){
+  # Step 1: Make a stack of the relevant data and move it into a dataframe
+  astack <- c(
+  cooling_stack[[j]],
+  n2r_no,
+  lcm2)
+  names(astack)<-c("cooling","region","lcm")
+  adf<-as.data.frame(astack)
+  clean_adf <- adf %>% drop_na()
+  # Step 2: Retrieve all the different summary statistics we want
+  # means by region and ecosystem type
+  mean_by_region_es <- clean_adf %>% 
+    group_by(region,lcm) %>% 
+    summarise(cooling = mean(cooling))
+  mean_by_es <- clean_adf %>% 
+    select(-region) %>% 
+    group_by(lcm) %>% 
+    summarise(cooling = mean(cooling)) %>%
+    mutate(region = "NO") %>%
+    relocate(region,.before=lcm)
+  # total means by NUTS2
+  mean_by_region <- clean_adf %>% 
+    group_by(region) %>% 
+    summarise(cooling = mean(cooling)) %>% 
+    mutate(lcm="All") %>%
+    relocate(lcm,.after=region)
+  # total mean for the whole country NUTS0
+  mean_overall <- clean_adf %>% select(cooling) %>% 
+    summarise(cooling=mean(cooling)) %>%
+    mutate(region = "NO",lcm = "All") %>%
+    relocate(cooling,.after =lcm)
+  # put together
+  mean_vals <- rbind(mean_by_es,mean_overall,mean_by_region_es,mean_by_region) %>% 
+    filter(region !="NO09") %>% 
+    pivot_wider(names_from=lcm,values_from = cooling) %>%
+    left_join(n2shp %>% as.data.frame() %>% select(NUTS_ID,NUTS_NAME),
+            by = join_by(region == NUTS_ID)) %>%
+    rename(Name = NUTS_NAME) %>%
+    relocate(Name,.after=region) %>%
+    rename(Region = region)
+  mean_vals$Name[mean_vals$Region=="NO"]<-"Norge"
+  # put into our list
+  stl[[j]]<-mean_vals
+  # Step 3: clean up
+  rm(astack,adf,clean_adf,mean_overall,mean_by_region,mean_by_es,mean_by_region_es,mean_vals)
 }
-
-# then run
-nuts_st_6 <- cooling_by_nuts(j=1)
-nuts_st_7 <- cooling_by_nuts(j=2)
-nuts_st_8 <- cooling_by_nuts(j=3)
-nuts_st_9 <- cooling_by_nuts(j=4)
+names(stl)<-mdr
 ```
 
 Here are the results for June (rounded)
 
 ```{r}
-kable(nuts_st_6 %>% mutate(across(where(is.numeric), ~ round(.x, 2))))
+kable(stl[[1]] %>% mutate(across(where(is.numeric), ~ round(.x, 2))))
 ```
 
 Here are the results for July (rounded)
 
 ```{r}
-kable(nuts_st_7 %>% mutate(across(where(is.numeric), ~ round(.x, 2))))
+kable(stl[[2]] %>% mutate(across(where(is.numeric), ~ round(.x, 2))))
 ```
 
 ## 6.4 Use tables
 
 ```{r}
-ut_6 <- nuts_st_6 %>% 
-  select(c(Region,w_avg_cool)) %>% 
-  mutate(`Intermediate consumption by industries` = NA) %>%
-  mutate(`Government final consumption` = NA) %>%
-  mutate(`Households final consumption` = w_avg_cool) %>%
-  mutate(`Gross capital formation` = NA) %>%
-  mutate(Exports = NA)
-ut_7 <- nuts_st_7 %>% 
-  select(c(Region,w_avg_cool)) %>% 
-  mutate(`Intermediate consumption by industries` = NA) %>%
-  mutate(`Government final consumption` = NA) %>%
-  mutate(`Households final consumption` = w_avg_cool) %>%
-  mutate(`Gross capital formation` = NA) %>%
-  mutate(Exports = NA)
-ut_8 <- nuts_st_8 %>% 
-  select(c(Region,w_avg_cool)) %>% 
-  mutate(`Intermediate consumption by industries` = NA) %>%
-  mutate(`Government final consumption` = NA) %>%
-  mutate(`Households final consumption` = w_avg_cool) %>%
-  mutate(`Gross capital formation` = NA) %>%
-  mutate(Exports = NA)
-ut_9 <- nuts_st_9 %>% 
-  select(c(Region,w_avg_cool)) %>% 
-  mutate(`Intermediate consumption by industries` = NA) %>%
-  mutate(`Government final consumption` = NA) %>%
-  mutate(`Households final consumption` = w_avg_cool) %>%
-  mutate(`Gross capital formation` = NA) %>%
-  mutate(Exports = NA)
+utl<-list()
+for(j in 1:length(mdr)){
+  utl[[j]]<-stl[[j]] %>% 
+    select(c(Region,Name,All)) %>% 
+    mutate(`Intermediate consumption by industries` = NA) %>%
+    mutate(`Government final consumption` = NA) %>%
+    mutate(`Households final consumption` = All) %>%
+    mutate(`Gross capital formation` = NA) %>%
+    mutate(Exports = NA) %>%
+    rename(Total = All)
+}
+names(utl)<-mdr
 ```
 
 Here are the results for June (rounded)
 
 ```{r}
-kable(ut_6 %>% mutate(across(where(is.numeric), ~ round(.x, 2))))
+kable(utl[[1]] %>% mutate(across(where(is.numeric), ~ round(.x, 2))))
 ```
 
 Here are the results for July (rounded)
 
 ```{r}
-kable(ut_6 %>% mutate(across(where(is.numeric), ~ round(.x, 2))))
+kable(utl[[2]] %>% mutate(across(where(is.numeric), ~ round(.x, 2))))
 ```
