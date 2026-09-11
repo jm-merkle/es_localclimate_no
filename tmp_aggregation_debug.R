@@ -10,25 +10,139 @@ n2shp <- project(n2shp,crs(lcm))
 n2shp$NUTS_ID
 
 
-
 plot(n2shp)
 
 # rasterize the shape
 n2r_no <- terra::rasterize(n2shp,mask_stack,field="NUTS_ID")
-
 plot(n2r_no)
 
+# then we need lcm
+lcm2 <- resample(lcm,mask_stack,method='near')
+res(lcm2)
+
+# now we put this into a dataframe with lcm
+
+plot(crop(lcm,mask_stack,mask=T))
+
+res(mask_stack)
+
+
+plot(mask_stack)
+
+j=2
+
+astack <- c(
+  cooling_stack[[j]],
+  n2r_no,
+  lcm2)
+names(astack)<-c("cooling","city","lcm")
+adf<-as.data.frame(astack)
+clean_adf <- adf %>% drop_na()
+
+# mean by ES type
+mean_by_city_es <- clean_adf %>% group_by(city,lcm) %>% summarise(cooling = mean(cooling))
+
+mean_by_city <- clean_adf %>% group_by(city) %>% summarise(cooling = mean(cooling))
+
+# why is nuts area 09 in there?
+
+plot(n2r_no)
+plot(cooling_stack[[j]],add=T,legend=F)
+
+# This happens due to the buffer around sandnes! Need to check what INCA does here. 
+
+# And then we need to check whether the mean calculations are based on the whole 
+# nuts area, or only pixels we have cooling for, or masked to available LST data.
+
+gc()
 
 
 
+# also check pixel count 
+
+# Trondheim etc (NO06)
+test<-clean_adf %>% filter(city=="NO06",lcm=="Settlements and other artificial areas")
+# Settlements: I get 3168 pixels, while INCA reports 2755
+test<-clean_adf %>% filter(city=="NO06",lcm=="Cropland")
+# Cropland: I get 2909 pixels, INCA gets 3403
+test<-clean_adf %>% filter(city=="NO06",lcm=="Grassland")
+# I get 293 pixels, INCA reports 196
+test<-clean_adf %>% filter(city=="NO06",lcm=="Forest and woodlands")
+# I get 13045 pixels, INCA reports 13691
+test<-clean_adf %>% filter(city=="NO06",lcm=="Heathlands and shrub")
+# I get 669 pixels, INCA reports 744
+test<-clean_adf %>% filter(city=="NO06",lcm=="Sparsely vegetated ecosystems")
+# I get 406 pixels, INCA reports 248
+
+# My take is that these pixel counts are rather far off
+
+
+# and our averages are very far off from INCA results, both its reported supply
+# tables and its reported intermediated calculations. So let's start with checking 
+# proportions
+
+clean_adf %>% filter(city=="NO06") %>% count(lcm) %>% mutate(prop = n/sum(n))
+# right. So these are not entirely the same, but also not too far off. 
+
+# Let's try compute the sum of cooling by es type
+
+clean_adf %>% filter(city=="NO06") %>% select(lcm,cooling) %>% group_by(lcm) %>% summarise(sum_cool = sum(cooling))
+# ok here we see the problem. Our sums are like five times smaller than what INCA has. This is what we need to dig further in to.
+
+
+# what does this look like in oslo? NO08
+clean_adf %>% filter(city=="NO08") %>% select(lcm,cooling) %>% group_by(lcm) %>% summarise(sum_cool = sum(cooling))
+# even larger difference 
+
+# what does it look like in vestlandet (NO0A)
+clean_adf %>% filter(city=="NO0A") %>% select(lcm,cooling) %>% group_by(lcm) %>% summarise(sum_cool = sum(cooling))
+# very large difference as well. I wonder what they have done to get those sums.
 
 
 
+# check overall sum
+sum(clean_adf$cooling)
+sum(values(cooling_stack[[j]]),na.rm=T)
+
+global(cooling_stack[[j]], "sum", na.rm = TRUE)
 
 
+global(evapr_no, "mean", na.rm = TRUE)
 
+global(evapr_no, "mean", na.rm = TRUE)
+global(tcdr_no, "mean", na.rm = TRUE)
+global(cooling_stack[[j]], "sum", na.rm = TRUE)
+global(!is.na(cooling_stack[[j]]), "sum")
 
+inca_cooling<-rast(file.path(here::here(),"tmp_inca_cooling.tif"))
 
+plot(inca_cooling)
+res(inca_cooling)
+inca_cool_a <- resample(inca_cooling,cooling_stack)
+
+plot(inca_cool_a)
+sum(values(inca_cool_a),na.rm=T)
+
+# this is INCA cooling for OSLO
+plot(crop(inca_cooling,cityb_buf[1,],mask=T))
+
+# this is the difference to ours¨
+plot(crop(cooling_stack[[j]],cityb_buf[1,],mask=T))
+
+# ok this is really crazy... Cooling goes up to 50 degrees in Oslo! What is wrong with these guys.
+summary(values(inca_cool_a))
+
+summary(values(cooling_stack[[j]]))
+
+# right, so copilot has identified that there might be a massive bug in the INCA script.
+# the creation of the cooling rasters might be based on wrong inputs, because the code
+# draws from column indeces rather than column names. The column indices indicate that
+# the coefficients imposed to generate the cooling rasters are completely wrong. 
+# it uses mean tree cover as alpha1h, cooling_mean as beta1h and cooling median as gamma1h.
+# then it uses alpha1h as alpha 2h, beta1h as beta2h, and gamma1h as gamma2h.
+# see python script line 491 ff.
+
+# I should try to recreate this mistake, and see if it brings me closer to the INCA reported results.
 
 
 
