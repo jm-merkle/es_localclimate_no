@@ -730,7 +730,6 @@ So here now we aggregate the cooling rasters by NUTS2 area, NUTS0 area, and ecos
 ```{r,message = FALSE, results = 'hide'}
 gc()
 # now cooling by nuts and ecosystem
-gc()
 # Import Norway NUTs2 shape
 n2shp<-terra::vect(file.path(d_fp,"Norway_files","NUTS2021_NO_LVL2_wosvalbard","NUTS2021_NO_LVL2_wos.shp"))
 n2shp <- project(n2shp,crs(lcm))
