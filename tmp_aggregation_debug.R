@@ -1,6 +1,84 @@
 
 
 
+### We run this as a loop across months and cities. Following INCA's python implementation as close as possible
+cooling_list_m <- vector("list", length(mdr))
+for(j in 1:length(mdr)){
+  # make a list for the city-wise cooling rasters
+  cooling_list <- vector("list", nrow(cityb_buf))
+  for(i in 1:nrow(cityb_buf)){
+    # get lcm
+    tmp_lcm <- crop(lcm2,cityb_buf[i,],mask=T)
+    tmp_lcm[tmp_lcm %in% c("Rivers and canals","Lakes and reservoirs","Coastal beaches, dunes and wetlands","Marine ecosystems")]<-NA
+    # get coefficients
+    alpha1h_ <- firstdf$est_intercept[firstdf$month==mdr[j] & firstdf$city==cityb_buf$LAU_NAME[i]]
+    beta1h_ <- firstdf$est_tcd[firstdf$month==mdr[j] & firstdf$city==cityb_buf$LAU_NAME[i]]
+    gamma1h_ <- firstdf$est_evap[firstdf$month==mdr[j] & firstdf$city==cityb_buf$LAU_NAME[i]]
+    # create simulated lst rasters
+    lst_sim_green_ <- alpha1h_ + beta1h_*crop(tcdr_no,cityb_buf[i,],mask=T) + gamma1h_*crop(evapr_no,cityb_buf[i,],mask=T)
+    lst_sim_gray_ <- alpha1h_ + 0*crop(tcdr_no,cityb_buf[i,],mask=T) + 0*crop(evapr_no,cityb_buf[i,],mask=T)
+    # create simulated air temp rasters
+    t_air_green_ <- alpha2h + beta2h*lst_sim_green_ + gamma2h*crop(lat_r,cityb_buf[i,],mask=T)
+    t_air_gray_ <- alpha2h + beta2h*lst_sim_gray_ + gamma2h*crop(lat_r,cityb_buf[i,],mask=T)
+    # cooling
+    cooling_ <- t_air_gray_ - t_air_green_
+    # as in INCA we force negative values to be zero
+    cooling_[cooling_<0] <- 0
+    # unlike in INCA (but as requested in the handbook) we set cooling of water bodies to NA
+    cooling_[is.na(tmp_lcm)] <- NA
+    # save in stack
+    cooling_list[[i]]<-cooling_
+    # tidy up
+    rm(alpha1h_,beta1h_,gamma1h_,lst_sim_gray_,lst_sim_green_,t_air_gray_,t_air_green_,cooling_,tmp_lcm)
+  }
+  # in this function now we put the cities together and impose the mean cooling for the overlapping boundaries
+  cooling_list_m[[j]] <- do.call(terra::mosaic,c(cooling_list,fun=mean))
+  # save
+  writeRaster(cooling_list_m[[j]],file.path(rfp,paste0("cooling_",j,".tif")),overwrite=T)
+}
+cooling_stack<-terra::rast(cooling_list_m)
+names(cooling_stack)<-mdr
+rm(cooling_list_m)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 ################################################################################
 ##### try recreate INCA bug ####################################################
 ################################################################################
@@ -56,22 +134,34 @@ names(cooling_stack_wrong)<-mdr
 rm(cooling_list_m)
 
 
-# plot for july
-j=2
-for(i in 1:nrow(cityb_buf)){
-  plot(crop(cooling_stack[[j]], cityb_buf[i,],mask=T),main=paste(cityb_buf$LAU_NAME[i],"cooling","month",mdr[j]), legend=T)
-  plot(roads_list[[i]],add=T)
-}
+### read in INCA cooling
+inca_cooling<-rast(file.path(here::here(),"tmp_inca_cooling.tif"))
+sum(values(inca_cooling),na.rm=T)
+plot(inca_cooling)
+res(inca_cooling)
+# resample
+inca_cooling_a <- terra::resample(inca_cooling,cooling_stack)
+sum(values(inca_cooling_a),na.rm=T)
+
+#
+sum(values(cooling_stack[[2]]),na.rm=T)
+sum(values(cooling_stack_wrong[[2]]),na.rm=T)
+# right, so this shows we have replicated the INCA bug.
+# raster cooling sums fit to what INCA reports. Let's test for individual cities
+sum(values(crop(cooling_stack[[2]],cityb_buf[1,],mask=T)),na.rm=T)
+sum(values(crop(cooling_stack_wrong[[2]],cityb_buf[1,],mask=T)),na.rm=T)
+sum(values(crop(inca_cooling_a,cityb_buf[1,],mask=T)),na.rm=T)
+# fits for Oslo
+sum(values(crop(cooling_stack[[2]],cityb_buf[8,],mask=T)),na.rm=T)
+sum(values(crop(cooling_stack_wrong[[2]],cityb_buf[8,],mask=T)),na.rm=T)
+sum(values(crop(inca_cooling_a,cityb_buf[8,],mask=T)),na.rm=T)
+# fits for Lørenskog
 
 
-
-# this is INCA cooling for OSLO
-plot(crop(inca_cooling,cityb_buf[1,],mask=T))
-# here is ours
-plot(crop(cooling_stack[[2]], cityb_buf[1,],mask=T), legend=T)
-# damn we clearly have found the problem here.... Crazy.
 ##########################################################
 ### now make a table with the wrong data
+# and then trace if we can recreate the aggregated results
+
 gc()
 # now cooling by nuts and ecosystem
 # Import Norway NUTs2 shape
@@ -83,6 +173,113 @@ n2r_no <- terra::rasterize(n2shp,mask_stack,field="NUTS_ID")
 lcm2 <- resample(lcm,mask_stack,method='near')
 # now make a loop across months
 stl_wrong<-list()
+j=2
+
+# Step 1: Make a stack of the relevant data and move it into a dataframe
+astack <- c(
+  cooling_stack_wrong[[j]],
+  n2r_no,
+  lcm2)
+names(astack)<-c("cooling","region","lcm")
+adf<-as.data.frame(astack)
+clean_adf <- adf %>% drop_na()
+# Step 2: Retrieve all the different summary statistics we want
+# means by region and ecosystem type
+mean_by_region_es <- clean_adf %>% 
+  group_by(region,lcm) %>% 
+  summarise(cooling = mean(cooling))
+mean_by_es <- clean_adf %>% 
+  select(-region) %>% 
+  group_by(lcm) %>% 
+  summarise(cooling = mean(cooling)) %>%
+  mutate(region = "NO") %>%
+  relocate(region,.before=lcm)
+# total means by NUTS2
+mean_by_region <- clean_adf %>% 
+  group_by(region) %>% 
+  summarise(cooling = mean(cooling)) %>% 
+  mutate(lcm="All") %>%
+  relocate(lcm,.after=region)
+# total mean for the whole country NUTS0
+mean_overall <- clean_adf %>% select(cooling) %>% 
+  summarise(cooling=mean(cooling)) %>%
+  mutate(region = "NO",lcm = "All") %>%
+  relocate(cooling,.after =lcm)
+# put together
+mean_vals <- rbind(mean_by_es,mean_overall,mean_by_region_es,mean_by_region) %>% 
+  filter(region !="NO09") %>% 
+  pivot_wider(names_from=lcm,values_from = cooling) %>%
+  left_join(n2shp %>% as.data.frame() %>% select(NUTS_ID,NUTS_NAME),
+            by = join_by(region == NUTS_ID)) %>%
+  rename(Name = NUTS_NAME) %>%
+  relocate(Name,.after=region) %>%
+  rename(Region = region)
+mean_vals$Name[mean_vals$Region=="NO"]<-"Norge"
+
+
+
+
+clean_adf %>% filter(region=="NO06",lcm=="Settlements and other artificial areas") %>% nrow()
+# pixel count is more or less correct
+clean_adf %>% filter(region=="NO06",lcm=="Settlements and other artificial areas") %>% select(cooling) %>% sum()
+# 50% higher
+clean_adf %>% filter(region=="NO06",lcm=="Cropland") %>% select(cooling) %>% sum()
+# 10% higher
+clean_adf %>% filter(region=="NO06",lcm=="Grassland") %>% select(cooling) %>% sum()
+# 100% higher
+clean_adf %>% filter(region=="NO06",lcm=="Forest and woodlands") %>% select(cooling) %>% sum()
+# 20% higher
+clean_adf %>% filter(region=="NO06",lcm=="Heathlands and shrub") %>% select(cooling) %>% sum()
+# 10% higher
+clean_adf %>% filter(region=="NO06",lcm=="Sparsely vegetated ecosystems") %>% select(cooling) %>% sum()
+# 150% higher
+clean_adf %>% filter(region=="NO06",lcm=="Inland wetlands") %>% select(cooling) %>% sum()
+# 80% higher
+clean_adf %>% filter(region=="NO06",lcm=="Rivers and canals") %>% select(cooling) %>% sum()
+# f80% higher
+clean_adf %>% filter(region=="NO06",lcm=="Lakes and reservoirs") %>% select(cooling) %>% sum()
+# 30# higher
+clean_adf %>% filter(region=="NO06",lcm=="Marine inlets and transitional waters") %>% select(cooling) %>% sum()
+# same (zero)
+clean_adf %>% filter(region=="NO06",lcm=="Coastal beaches, dunes and wetlands") %>% select(cooling) %>% sum()
+# 100% higher
+clean_adf %>% filter(region=="NO06",lcm=="Marine ecosystems") %>% select(cooling) %>% sum()
+# very close
+
+# the most represented categories are settlements, forest, and cropland. For those, the deviation is not large.
+
+# now continue with tracing the next columns. After that move to SUT
+# check the lcm percentages
+clean_adf %>% filter(region=="NO06") %>% count(lcm) %>% mutate(prop = n/sum(n))
+
+# so i have confirmed that column6 in the statistics reports analytically the 
+# same as we do. But our results are slightly different, mostly because the areas 
+# do not seem to match exactly.  Probably because they have removed the buffers
+# let's quickly check that
+
+
+
+
+plot(crop(inca_cooling_a,cityb_buf[4,],mask=T),alpha=0.2)
+plot(crop(inca_cooling_a,cityb[4,],mask=T),alpha=0.9,add=T)
+
+plot(crop(cooling_stack_wrong[[2]],cityb_buf[4,],mask=T))
+
+length(values((crop(cooling_stack_wrong[[2]],cityb[4,],mask=T)),na.rm=T))
+length(values((crop(cooling_stack_wrong[[2]],cityb_buf[4,],mask=T)),na.rm=T))
+# no, the one with buffer is closer to the inca pixel number
+
+# ok, let's take a look at INCA's SUT output
+# it is now consistent with INCA's csv output
+
+
+
+
+summary(values(cooling_stack[[4]]))
+
+
+
+
 for(j in 1:length(mdr)){
   # Step 1: Make a stack of the relevant data and move it into a dataframe
   astack <- c(

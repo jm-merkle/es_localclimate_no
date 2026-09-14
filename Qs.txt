@@ -5,8 +5,7 @@ which evap file should we use? The one covering all months?
 We use DEGURBA-based city LAUs. Any other shapes recommended?
 
 LST maps have massive gaps. Interestingly we can still build cooling rasters without gaps, 
-because we only need LST files for calibration of the simulation model. INCA masks out all missing data areas.
-We do the same atm, but could in a way also create less patchy results.
+because we only need LST files for calibration of the simulation model. But it implies that estimated coefficients might not be based on a representative sample of the area present in the city
 
 
 

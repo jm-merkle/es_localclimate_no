@@ -17,7 +17,9 @@ table {
 
 Magnus Merkle (SSB)
 
-Naturregnskapsprosjekt, 09. September 2026
+Naturregnskapsprosjekt, 14. September 2026
+
+Please do not share. This is work in progress.
 
 \
 
@@ -29,8 +31,9 @@ Changes since version 1:
 - Changed to 150m resolution as done in INCA
 - Changed to Grunnkartet's CRS
 - Corrected cooling raster calculations
-- Corrected weighted average calculations
-- Adjustments to report the same indicators as INCA does
+- Corrected cooling aggregations
+- Adjustments to report equivalent indicators as INCA does
+- Added discussion of identified inconsistencies and errors in INCA code
 
 # Abstract and Limitation
 
@@ -256,7 +259,7 @@ for(i in 1:nrow(cityb_buf)){
 }
 ```
 
-Now next we need to identify which of these cities have experienced maximum daily temperatures of at least 25 degrees celsius in the reference year of 2024. For this purpose we first download and import Norwegian meteorological data for 2024 covering the four cities. For now I have eyeballed which weathers stations fit in which city. Given that we observe maximum temperatures of at least 25 degrees celsius in all of them, the precise selection of weather stations does not really matter.
+Now next we need to identify which of these cities have experienced maximum daily temperatures of at least 25 degrees celsius in the reference year of 2024. For this purpose we first download and import Norwegian meteorological data for 2024 covering the four cities. For now I have eyeballed which weather stations fit in which city. Given that we observe maximum temperatures of at least 25 degrees celsius in all of them, the precise selection of weather stations does not really matter.
 
 ```{r,message = FALSE, results='hide'}
 gc()
@@ -374,7 +377,7 @@ evapr_no <- crop(evapr,norcrop)
 evapr_no <- terra::project(evapr_no,crs(lcm),res=res(evapr_no),method="bilinear")
 # mask to city lau
 evapr_no <- mask(crop(evapr_no,cityb_buf),cityb_buf)
-evapr_no <- 100*evapr_no # this step to immitate what INCA does (but it actually
+# evapr_no <- 100*evapr_no # this step to immitate what INCA does (but it actually
 # is not correct)
 # When plotting the resulting map we see that it is a bit patchy, too. Possibly
 # revisit later.
@@ -408,13 +411,16 @@ mask_8_no<-terra::ifel(!is.na(evapr_no) & !is.na(tcdr_no) & !is.na(lstr_stack[[3
 mask_9_no<-terra::ifel(!is.na(evapr_no) & !is.na(tcdr_no) & !is.na(lstr_stack[[4]]),1,NA)
 
 mask_stack<-c(mask_6_no,mask_7_no,mask_8_no,mask_9_no)
+# then we need lcm, make sure it is aligned with the rest of the raster data
+lcm2 <- resample(lcm,mask_stack,method='near')
+#clean up
 rm(mask_6_no,mask_7_no,mask_8_no,mask_9_no)
 gc()
 ```
 
 ## 3.3 Run regressions
 
-We loop across cities and across available months here. In each city and month we run a regression where grid cells are units of observation. Predicting LST with TCD and EVAP. We store the resulting intercepts for each city and month.
+We loop across cities and across available months here. In each city and month we run a regression where grid cells are units of observation. Predicting LST with TCD and EVAP. We store the resulting coefficients for each city and month.
 ```{r, message = FALSE, results = 'hide'}
 gc()
 # months to consider
@@ -644,29 +650,19 @@ Then we compute for each grid cell $i$ and month $j$ the expected air temperatur
 
 $$ \widehat{T}^{air_{simLSTgray}}_{j,i} = \widehat{\alpha}_{2} + \widehat{\beta}_{2} \widehat{LST}^{zero}_{j,i} + \widehat{\gamma}_{2} LAT_{j,i} $$.
 
-It is important to note that $\widehat{LST}^{zero}_{j,i}$ is constant for each grid cell in a city-month, because we only get one $\widehat{\alpha}_{1,j}$ for each city-month. This again implies that $\widehat{T}^{air,zero}_{j,i}$ actually only varies across the north-south dimension due to varying latitude. The cooling effect is then retrieved for each grid cell $i$ in city $j$ as
+Just as is the case for the city-statistics, $\widehat{LST}^{zero}_{j,i}$ is constant for each grid cell in a city-month, because we only get one $\widehat{\alpha}_{1,j}$ for each city-month. The cooling effect is then retrieved for each grid cell $i$ in city $j$ as
 
 $$ \widehat{cooling_{j,i}} = \widehat{T}^{air_{simLSTgray}}_{j,i} - \widehat{T}^{air_{simLSTgreen}}_{j,i}$$.
 
-Bear in mind that latitude cancels out here, so we are effectively subtracting a constant no-vegetation counterfactual from the simulated varying air temperature with vegetation. After plugging in for estimated grid-cell temperature in both secenarios with vegetation and without vegetation, the previous equation simplifies to:
+Again, as for the city statistics, we are effectively subtracting a constant no-vegetation counterfactual from the simulated varying air temperature with vegetation. After plugging in for estimated grid-cell temperature in both secenarios with vegetation and without vegetation, the previous equation simplifies to:
 
 $$ \widehat{cooling}_{j,i} = -\widehat{\beta}_{2} * (\widehat{\beta}_{1,j}TCD_{j,i} + \widehat{\gamma}_{1,j}EVAP_{j,i})$$
 
 As you can see, cooling is now a function of slightly different inputs than what it was for the city-cooling computation. It implies that we do not actually need to use the local surface temperature data rasters when computing the cooling rasters based on fully simulated data. The cooling calculation simplifies to being based on the coefficients from both first and second regressions, as well as the tree cover raster and the evapotranspiration raster. In INCA this analytical simplification step has not been made use of.
 
-We then create cooling rasters, which we can use to summarise cooling by area and ecosystems. INCA reports the city-level results based on non-modified cooling data (where negative cooling isn't forced to zero) while the NUTS-level results are reported based on modified cooling data (negative cooling means zero cooling, see line 512 in the python script "__init___.py"). So we do the same here, and acknowledge that this is a further reason for inconsistency between the city-level and the region-level estimates.
-
-Another inconsistency to name: The handbook specifies that the cooling effect of water ecosystems should be reported to zero (point 10.4 in chapter 10). INCA does not do this. We stick to what INCA does, for now.
-
-And another inconsistency: The regression coefficients and city-cooling results are based on a data population that is NA for all pixels where at least one of the input data rasters (LST, TCD, EVAP) is NA. The big gaps in the LST data therefore imply that the results are valid only for a small subset of the city areas in some cities. Now in the calculation of regional results and by ecosystem, because the computation uses simulated LST instead of observed LST, the data population is larger. It does not inherit the LST data gaps. This risks creating a false precision, because for some of the areas, the simulations are informed by only a very small, and possibly unrepresentative subset of the actual area.
-
-And a final methodological concern: Due to the 150m buffers around cities, the shapes of individual cities that are located next to each other (e.g. Oslo, Lørenskog and Rælingen) actually overlap. In my view, the regional statistics should ideally be based on modified shapes without overlaps. So that the overlaps do not create weird average values for border regions. INCA, however, does not take explicit care of this problem. For the time being, we follow INCA in our current implementation in that we apply average cooling values for the overlapping areas.
-
-Add more text: main concern that INCA code to create cooling rasters may be completely wrong.
-
 ## 6.2 Compute cooling rasters
 
-So here we compute cooling rasters based on the method described in the previous section. This we implement as closely as possible to INCA, but without inheriting the bug about wrong coefficients.
+So here we compute cooling rasters based on the method described in the previous section. This we implement as closely as possible to INCA, but without inheriting INCA's bug using wrong coefficients. We also exclude water ecosystems from the computation as instructed by the handbook (INCA does not do this). As the Norwegian LCM does not include ecosystem "Marine inlets" in the first place, this means that we only need to exclude "Rivers and canals", "Lakes and reservoirs", and "Marine ecosystems".
 
 ```{r,message = FALSE, results = 'hide'}
 gc()
@@ -676,6 +672,9 @@ for(j in 1:length(mdr)){
   # make a list for the city-wise cooling rasters
   cooling_list <- vector("list", nrow(cityb_buf))
   for(i in 1:nrow(cityb_buf)){
+    # get lcm
+    tmp_lcm <- crop(lcm2,cityb_buf[i,],mask=T)
+    tmp_lcm[tmp_lcm %in% c(810,910,1200)]<-NA # rivers, lakes, sea, are set to NA
     # get coefficients
     alpha1h_ <- firstdf$est_intercept[firstdf$month==mdr[j] & firstdf$city==cityb_buf$LAU_NAME[i]]
     beta1h_ <- firstdf$est_tcd[firstdf$month==mdr[j] & firstdf$city==cityb_buf$LAU_NAME[i]]
@@ -690,10 +689,12 @@ for(j in 1:length(mdr)){
     cooling_ <- t_air_gray_ - t_air_green_
     # as in INCA we force negative values to be zero
     cooling_[cooling_<0] <- 0
+    # unlike in INCA (but as requested in the hanbook) we set cooling of water bodies to NA
+    cooling_[is.na(tmp_lcm)] <- NA
     # save in stack
     cooling_list[[i]]<-cooling_
     # tidy up
-    rm(alpha1h_,beta1h_,gamma1h_,lst_sim_gray_,lst_sim_green_,t_air_gray_,t_air_green_,cooling_)
+    rm(alpha1h_,beta1h_,gamma1h_,lst_sim_gray_,lst_sim_green_,t_air_gray_,t_air_green_,cooling_,tmp_lcm)
   }
   # in this function now we put the cities together and impose the mean cooling for the overlapping boundaries
   cooling_list_m[[j]] <- do.call(terra::mosaic,c(cooling_list,fun=mean))
@@ -725,7 +726,9 @@ for(i in 1:nrow(cityb_buf)){
 
 ## 6.3 Supply tables by NUTS2 and 0 in Norway
 
-So here now we aggregate the cooling rasters by NUTS2 area, NUTS0 area, and ecosystem type. The 150m buffers imply that NUTS2 areas that do not include city LAUs but that do border city LAUs do include cooling pixels. INCA does not address this problem. We should set those cases to zero.
+So here now we aggregate the cooling rasters by NUTS2 area, NUTS0 area, and ecosystem type. The 150m buffers imply that those NUTS2 areas that do not include city LAUs but that do have a border with city LAUs, do include cooling pixels. INCA does not address this problem. We set those cases to zero.
+
+The indicators we report in our supply and use tables are what INCA calls "simple average" for the by-ecosystem values and what INCA calls "weighted average" for cooling across all ecosystem types.
 
 ```{r,message = FALSE, results = 'hide'}
 gc()
@@ -735,8 +738,6 @@ n2shp<-terra::vect(file.path(d_fp,"Norway_files","NUTS2021_NO_LVL2_wosvalbard","
 n2shp <- project(n2shp,crs(lcm))
 # rasterize the shape
 n2r_no <- terra::rasterize(n2shp,mask_stack,field="NUTS_ID")
-# then we need lcm, make sure it is aligned with the rest of the raster data
-lcm2 <- resample(lcm,mask_stack,method='near')
 # now make a loop across months
 stl<-list()
 for(j in 1:length(mdr)){
@@ -789,18 +790,84 @@ names(stl)<-mdr
 ```
 
 Here are the results for June (rounded)
-
 ```{r}
 kable(stl[[1]] %>% mutate(across(where(is.numeric), ~ round(.x, 2))))
 ```
 
 Here are the results for July (rounded)
-
 ```{r}
 kable(stl[[2]] %>% mutate(across(where(is.numeric), ~ round(.x, 2))))
 ```
 
-## 6.4 Use tables
+## 6.4 Ecosystem contribution tables
+
+To show how different ecosystems contribute to total cooling in each region, we construct seperate tables to show a decomposition of the (weighted) averages reported in the above section. This is what INCA calls "weighted average" for the by-ecosystem values. The decomposed values are not very insightful on their own, because they reflect the proportion of different ecosystems in each region (if the region consists predominantly of forest, forest will have the largest contribution to cooling). The cooling effectiveness of different ecosystems is much better captured by the values reported in the previous section.
+
+```{r,message = FALSE, results = 'hide'}
+gc()
+# decomposed total cooling by ecosystem for each region
+# now make a loop across months
+cstl<-list()
+for(j in 1:length(mdr)){
+  # Step 1: Make a stack of the relevant data and move it into a dataframe
+astack <- c(
+  cooling_stack[[j]],
+  n2r_no,
+  lcm2)
+names(astack)<-c("cooling","region","lcm")
+adf<-as.data.frame(astack)
+clean_adf <- adf %>% drop_na()
+# Step 2: Retrieve all the different summary statistics we want
+# means by region and ecosystem type
+mean_by_region_es <- clean_adf %>% 
+  group_by(region,lcm) %>% 
+  summarise(cooling = mean(cooling))
+mean_by_es <- clean_adf %>% 
+  select(-region) %>% 
+  group_by(lcm) %>% 
+  summarise(cooling = mean(cooling)) %>%
+  mutate(region = "NO") %>%
+  relocate(region,.before=lcm)
+# weights
+weights_by_region_es<-clean_adf %>% group_by(region) %>% count(lcm) %>% mutate(weight = n/sum(n)) %>% ungroup()
+weights_overall_es<-clean_adf %>% count(lcm) %>% mutate(weight = n/sum(n)) %>% ungroup()
+
+# put together
+decomp_by_region_es <- mean_by_region_es %>% left_join(weights_by_region_es) %>%
+  mutate(dcmp_cooling = cooling * weight)
+decomp_overall_es <- mean_by_es %>% left_join(weights_overall_es) %>%
+  mutate(dcmp_cooling = cooling * weight)
+decomp_vals <- rbind(decomp_overall_es,decomp_by_region_es) %>% 
+  filter(region !="NO09") %>% 
+  select(-c(n,weight,cooling)) %>%
+  pivot_wider(names_from=lcm,values_from = dcmp_cooling) %>%
+  left_join(n2shp %>% as.data.frame() %>% select(NUTS_ID,NUTS_NAME),
+            by = join_by(region == NUTS_ID)) %>%
+  rename(Name = NUTS_NAME) %>%
+  relocate(Name,.after=region) %>%
+  rename(Region = region) %>%
+  mutate(All = rowSums(across(`Settlements and other artificial areas`:`Coastal beaches, dunes and wetlands`)))
+decomp_vals$Name[decomp_vals$Region=="NO"]<-"Norge"
+  # put into our list
+  cstl[[j]]<-decomp_vals
+  # Step 3: clean up
+  rm(astack,adf,clean_adf,mean_by_es,mean_by_region_es,decomp_vals,decomp_overall_es,decomp_by_region_es,weights_overall_es,weights_by_region_es)
+}
+names(cstl)<-mdr
+```
+
+Here are the contribution results for June (rounded)
+```{r}
+kable(cstl[[1]] %>% mutate(across(where(is.numeric), ~ round(.x, 2))))
+```
+
+Here are the contribution results for July (rounded)
+```{r}
+kable(cstl[[2]] %>% mutate(across(where(is.numeric), ~ round(.x, 2))))
+```
+
+
+## 6.5 Use tables
 
 ```{r}
 utl<-list()
@@ -818,13 +885,53 @@ names(utl)<-mdr
 ```
 
 Here are the results for June (rounded)
-
 ```{r}
 kable(utl[[1]] %>% mutate(across(where(is.numeric), ~ round(.x, 2))))
 ```
 
 Here are the results for July (rounded)
-
 ```{r}
 kable(utl[[2]] %>% mutate(across(where(is.numeric), ~ round(.x, 2))))
 ```
+
+# 7. Problems with INCA
+
+While working on this replication of the INCA process in R, to quantify the ecosystem service of local climate regulation for Norway, I have identified several potential and definite problems in the INCA code. I will go through them here.
+
+## 7.1 Analytical inconsistency between city-level and region-level calculations
+
+As shown above, the computation of cooling in individual cities analytically differs from the computation of cooling across cities in regions. I suspect that this inconsistency is not intended. The former is based on comparing real-world observed LST to a simulated no-vegetation LST, while the latter is based on comparing simulated LST with vegetation to simulated no-vegetation LST. Due to this inconsistency, the city-level results cannot be compared to the region-level results.
+
+## 7.2 Severe bug in the region-level calculations
+
+The regional statistics are based on raster maps of cooling. The computation of those raster maps should be based on the calibrated linear models. However, INCA draws from incorrect inputs because the code uses column indices rather than column names (see function raster_consolidation in lines 491ff here https://code.europa.eu/inca/gis-plugins/gis-plugins/-/blob/main/src/inca/localclimate/__init__.py?ref_type=heads). So unfortunately, the creation of the cooling rasters are based on wrong inputs. INCA uses mean tree cover as alpha1h, cooling_mean as beta1h and cooling median as gamma1h. Then it uses alpha1h as alpha 2h, beta1h as beta2h, and gamma1h as gamma2h. I was able to roughly recreate INCA's incorrect cooling maps using the same incorrect inputs. They provide strongly upward biased results.
+
+## 7.3 Incorrect handling of water bodies
+
+The handbook specifies that the cooling effect of water ecosystems should be reported as zero (point 10.4 in chapter 10). INCA does not do this, and therefore, totals across ecosystem types are informed by both valid results (terrestrial cooling) and invalid results (water cooling). In our computation of regional statistics, we set those areas to NA, to stick to the handbook.
+
+## 7.4 Major data gaps in LST data are hidden
+
+The regression coefficients and city-cooling results are based on a data population that is NA for all pixels where at least one of the input data rasters (LST, TCD, EVAP) is NA. The big gaps in the LST data therefore imply that the results are valid only for a small subset of the city areas in some cities and months. Now in the calculation of regional results and by ecosystem, because the computation uses simulated LST instead of observed LST, the data population is substantially larger. It does not inherit the LST data gaps. This risks creating a false perception of precision, because for some of the areas, the simulations are informed by only a small, and possibly severely unrepresentative subset of the actual area.
+
+## 7.5 Possibly unintended side-effects of city buffers
+
+Due to the 150m buffers around cities, the shapes of individual cities that are located next to each other (e.g. Oslo, Lørenskog and Rælingen) actually overlap. In my view, the regional statistics should ideally be based on modified shapes without overlaps. So that the overlaps do not create weird average values for border regions. INCA, however, does not take explicit care of this problem. For the time being, we follow INCA in our current implementation in that we apply average cooling values for the overlapping areas. 
+
+Another side effect of the buffers is that those NUTS2 areas that do not include city LAUs but that do have a border with city LAUs, do include cooling pixels. INCA does not address this problem and therefore reports cooling for area NO09 (Agder og Sør-Østlandet), even though there is no city-LAU in that region. We set those cases to zero in our implementation.
+
+## 7.6 Incorrect read-in of evapotranspiration data
+
+The metadata in the evapotranspiration raster file includes a scale factor of 0.01. R terra automatically applies this scale factor to the values of the file, so it contains realistic numbers. But the python code in INCA does not apply this scale factor. Therefore, numbers in INCA for evapotranspiration are 100 times larger than what they should be. Given that it is a constant scale factor, this has not impact on the results, but it makes the coefficients less intuitive to read.
+
+## 7.7 Handling of negative cooling
+
+Here we have a further inconsistency between the city-statistics and the regional statistics. The process to compute cooling can and does return negative cooling values for some pixels. It does so in both analytical approaches mentioned in 7.1. In the regional computations these negative values are forced to zero. In the city computations they are not. We do the same in our quantification, to allow comparability to INCA's results, but emphasise that it would make some sense to set negative cooling to zero also in the city-wise implementation, given that we are trying to measure contribution to cooling and not to heating. The model is not designed to measure heating.
+
+# 8. Ideas for improvements
+
+Several ideas, including:
+
+- Use alternative LST data with better coverage, or otherwise a median or mean map of LST across months to minimise coverage gaps.
+- Use different city shape definitions and include more cities (beyond the DEGURBA definition).
+- Include more controls in the regression models. To change the cooling results, the controls would have to capture something that is currently (unintentionally) captured by vegetation. 
