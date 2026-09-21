@@ -190,6 +190,7 @@ cityb<-terra::vect(file.path(d_fp,"version_2026_7",
 # relevant for us. So we subset the data to Norway only.
 cityb<-cityb[cityb$CNTR_CODE == "NO",]
 # And then we subset to feature category 1 urban only.
+citytownb<-cityb[cityb$DGURBA %in% c(1,2),]
 cityb<-cityb[cityb$DGURBA == 1,]
 # For further operations we reproject the map to LCM's CRS and we add a 150m
 # buffer to the LAU polygons, as suggested by the handbook
@@ -197,14 +198,18 @@ cityb<-cityb[cityb$DGURBA == 1,]
 # https://code.europa.eu/inca/gis-plugins/gis-plugins/-/blob/main/src/inca/localclimate/__init__.py?ref_type=heads
 cityb <- terra::project(cityb,lcm)
 cityb_buf <- terra::buffer(cityb,150)
+citytownb <- terra::project(citytownb,lcm)
+citytownb_buf <- terra::buffer(citytownb,150)
 # save
 terra::writeVector(cityb,file.path(rfp,"no_city.shp"),overwrite=T)
 terra::writeVector(cityb_buf,file.path(rfp,"no_citywbuffer.shp"),overwrite=T)
+terra::writeVector(citytownb,file.path(rfp,"no_city_town.shp"),overwrite=T)
+terra::writeVector(citytownb_buf,file.path(rfp,"no_city_town_wbuffer.shp"),overwrite=T)
 # print the city names
 # unique(cityb$LAU_NAME)
 ```
 
-As a result we get `r length(unique(cityb$LAU_NAME))` LAU in Norway that qualify as city. If we count Sandnes to Stavanger, and Bærum, Rælingen and Lørenskog to Oslo, we have four cities in total, namely Bergen, Oslo, Stavanger, and Trondheim. Let's have a look at the land cover map for each of the LAU to be considered. We translate the land cover map to the ecosystem typology required by Eurostat. Category 10 (marine inlets and transitional waters) is missing in the Norwegian LCM. This does not matter for the ecosystem service of local climate regulation as we only consider cooling from vegetation, according to the handbook.
+As a result we get `r length(unique(cityb$LAU_NAME))` LAU in Norway that qualify as city. If wanted to include towns in the computation as well, we would have `r length(unique(citytownb$LAU_NAME))` LAU. If we count Sandnes to Stavanger, and Bærum, Rælingen and Lørenskog to Oslo, we have four cities in total, namely Bergen, Oslo, Stavanger, and Trondheim. Let's have a look at the land cover map for each of the LAU to be considered. We translate the land cover map to the ecosystem typology required by Eurostat. Category 10 (marine inlets and transitional waters) is missing in the Norwegian LCM. This does not matter for the ecosystem service of local climate regulation as we only consider cooling from vegetation, according to the handbook.
 
 ```{r,message = FALSE, results = 'hide'}
 gc()
@@ -278,6 +283,8 @@ ccr_buf <- ifel(ccr_buf,1,NA)
 urb_pol <- as.polygons(ccr_buf, dissolve = TRUE, na.rm = TRUE)
 # and then mask our city LAUs with this polygon
 cityb_buf_m<-intersect(cityb_buf,urb_pol)
+# and then the same for towns
+citytownb_buf_m<-intersect(citytownb_buf,urb_pol)
 # tidy up
 rm(hdcr,ucr,ccr,ccr_buf,urb_pol)
 ```
