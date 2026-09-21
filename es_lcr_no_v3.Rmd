@@ -1,0 +1,1309 @@
+---
+title: "Ecosystem Service Climate Regulation in Cities | Norway"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 4
+    theme: cosmo
+    code_folding: hide
+---
+
+```{css, echo=FALSE}
+table {
+  float: left;
+}
+```
+
+Magnus Merkle (SSB)
+
+Naturregnskapsprosjekt, 21. September 2026
+
+Please do not share. This is work in progress.
+
+\
+
+# Changelog
+
+Changes since version 2:
+
+- Added a parallel version based on the SCB method to define urban areas
+- Some formatting edits to the markdown document
+
+
+# Abstract and Limitation
+
+In this notebook we quantify the ecosystem service of local climate regulation (climate regulation in cities) for the Norwegian mainland in 2024. Most operations are executed with functions from R packages dplyr and tidyr (for general data formatting), terra (for geospatial data analysis), and stats (for regressions). The notebook is created on the basis of the following sources:
+
+- INCA GIS Plugin Code Repository (2026). Last accessed 13 August 2026, the relevant script is here: <https://code.europa.eu/inca/gis-plugins/gis-plugins/-/blob/main/src/inca/localclimate/__init__.py>
+- Marando et al. (2022) Urban heat island mitigation by green infrastructure in European Functional Urban Areas. Sustainable Cities and Society, 103564
+- Eurostat (2026) Ecosystem accounts handbook, 2026 edition
+- Immerzeel & Korkou (2024) Evaluation of the INCA-Tool for the purpose of ecosystem services accounting in Norway. EU Grants Project 2022-NO-EGD- Work Package 2. Norwegian Institute for Nature Research
+- Hellman, F., Brown, N. & Moström, J. (2025) Ecosystem accounts in Sweden. Deliverable 2.1 of Eurostat grant project 2023-SE-EGD: Advanced data modelling for ecosystem accounts. Statistics Sweden (SCB), Environmental Accounts.
+
+The quantification process follows the "default approach" described in Eurostat's ecosystem accounts handbook. This approach requires less data capacity than the "advanced approach".
+
+# 1. Filepaths and Functions
+
+The main functions we use are part of R packages dplyr and tidyr, terra, and stats.
+
+```{r, results = 'hide', message = FALSE, warning=FALSE}
+# make space
+rm(list = ls())
+# packages
+library(dplyr)
+library(tidyr)
+library(terra)
+library(sf)
+library(knitr)
+library(viridisLite)
+library(here)
+library(stats)
+library(tinytex)
+library(osmdata)
+# filepath
+d_fp<-file.path("C:","Users","muk",
+               paste0("OneDrive - Statistisk sentralbyr","\U00E5"),
+               "data","INCA")
+# file path to results
+rfp<-file.path(here::here(),"results")
+# A function to extract levels vectors from factor data stored in rasters 
+# rst is raster file, lrn is layer name
+gc()
+```
+
+# 2. Data Sources
+
+Here is a table of data sources used in this project.
+
+```{r}
+dfs<-data.frame(matrix(nrow=9,ncol=8))
+colnames(dfs) <- c("Input to","Data","Name","Provider","Resolution","Year","Future Updates","Notes")
+
+dfs[1,]<-c("Aggregation",
+           "Reference land cover map (LCM) with lookup table",
+           "Grunnkart_OT",
+           "Kartverket, NIBIO, SSB, Mdir",
+           "100m grid",
+           "2024",
+           "2025",
+           "...")
+dfs[2,]<-c("Estimation, simulation, and aggregation",
+           "City shapefiles",
+           "DGURBA_RG_01M_2021_4258",
+           "Eurostat (INCA default version 2026)",
+           "Vector",
+           "2021",
+           "unknown",
+           "The delineation of city boundaries is important because it defines how much of the surrounding greenspace is taken into account.")
+dfs[3,]<-c("Estimation and simulation",
+           "Local surface temperature data",
+           "07_LST_2024_eu_masked",
+           "Eurostat (INCA default version 2026)",
+           "100m grid",
+           "2024",
+           "unknown",
+           "This is based on data from USGS, processed by Eurostat to use for European ecosystem service accounting. The data has gaps for most of European cities. It represents (most likely) monthly median temperatures.")
+dfs[4,]<-c("Estimation",
+           "Tree cover density data.",
+           "TCD_100m_2023_compressed",
+           "Eurostat (INCA default version 2026)",
+           "100m grid",
+           "2023",
+           "unknown",
+           "This is based on data from the Chinese Academy of Sciences. We resample it to fit our 100m resolution grid.")
+dfs[5,]<-c("Estimation",
+           "Vegetation evaporation data.",
+           "interc_transp_2024_Jun-Jul-Aug-Sept",
+           "Eurostat (INCA default version 2026)",
+           "150m grid",
+           "2024",
+           "unknown",
+           "This is based on data from EU Space / Copernicus Land Monitoring Sevice")
+dfs[6,]<-c("Estimation",
+           "Weather station data",
+           "StationNeighborhood2016",
+           "Eurostat (INCA default version 2026)",
+           "not gridded",
+           "2016",
+           "no",
+           "This is weather station data from the US. Might be worth considering using weather data from Norway (due to different climate at the same latitudes as the US)")
+dfs[7,]<-c("Aggregation",
+           "NUTS2 shapefile for Norway",
+           "NUTS2021_NO_LVL2_wos",
+           "...",
+           "Vector",
+           "2021",
+           "not relevant",
+           "Only to retrieve results for specific subnational regions.")
+dfs[8,]<-c("Estimation, simulation, and aggregation",
+           "High density clusters",
+           "HDENS_CLST_2021",
+           "Eurostat GISCO",
+           "1km grid",
+           "2021",
+           "unknown",
+           "We use this as input to create alternative urban area specifications")
+dfs[9,]<-c("Estimation, simulation, and aggregation",
+           "Urban clusters",
+           "URBAN_CLST_2021",
+           "Eurostat GISCO",
+           "1km grid",
+           "2021",
+           "unknown",
+           "We use this as input to create alternative urban area specifications")
+#print
+kable(dfs)
+# clean up
+rm(dfs)
+```
+
+# 3. Estimate models of LST
+
+## 3.1 Overview
+
+In this first step we use gridded data to estimate a linear model of local surface temperature (LST) predicted by tree cover density (TCD) and evaporation. We estimate this model for each city, so it requires that our gridded data is cropped to city boundaries plus a buffer of 150 metres (as specified in Eurostat's handbook). The model is: $$ LST_{j} = \alpha_{1,j} + \beta_{1} TCD + \gamma_{1} EVAP $$ For each city, we save the estimated coefficients of the linear model.
+
+## 3.2 Import data
+
+Read in city shapefiles, LST raster, TCD raster, EVAP raster. We also import Norwegian Land Cover data. Then crop all raster files to the Norwegian city boundaries with a 150m buffer.
+
+### 3.2.1 LCM & urban areas
+
+We start by identifying cities in Norway that are counted within category "city" in the DGURBA dataset.
+```{r,message = FALSE, results = 'hide'}
+gc()
+# read Grunnkartet -------------------------------------------------------------
+lcm<-terra::rast(file.path(d_fp,"Norway_files","Grunnkart","Grunnkart_OT.tif"))
+
+# read city shapefiles ---------------------------------------------------------
+# Readme file in INCA's data repository states DEGURBA should be used for 2026
+# reporting
+cityb<-terra::vect(file.path(d_fp,"version_2026_7",
+                             "inca_input_local_climate_regulation","Urban_Areas",
+                             "2021","DEGURBA",
+                             "DGURBA_RG_01M_2021_4258.shp"))
+# MM: I checked the data and it has five categories. 1,2 and 3 relate to  degree 
+# of urbanisation (1 is cities, 2 is towns and semi-dense areas, 3 is rural). 
+# Additionally there is category 9 which exists only in Cyprus, so irrelevant 
+# for us. And then there is category 0 which is used in lakes and such. Also not 
+# relevant for us. So we subset the data to Norway only.
+cityb<-cityb[cityb$CNTR_CODE == "NO",]
+# And then we subset to feature category 1 urban only.
+cityb<-cityb[cityb$DGURBA == 1,]
+# For further operations we reproject the map to LCM's CRS and we add a 150m
+# buffer to the LAU polygons, as suggested by the handbook
+# INCA introduces the same buffer. See line 280 here:
+# https://code.europa.eu/inca/gis-plugins/gis-plugins/-/blob/main/src/inca/localclimate/__init__.py?ref_type=heads
+cityb <- terra::project(cityb,lcm)
+cityb_buf <- terra::buffer(cityb,150)
+# save
+terra::writeVector(cityb,file.path(rfp,"no_city.shp"),overwrite=T)
+terra::writeVector(cityb_buf,file.path(rfp,"no_citywbuffer.shp"),overwrite=T)
+# print the city names
+# unique(cityb$LAU_NAME)
+```
+
+As a result we get `r length(unique(cityb$LAU_NAME))` LAU in Norway that qualify as city. If we count Sandnes to Stavanger, and Bærum, Rælingen and Lørenskog to Oslo, we have four cities in total, namely Bergen, Oslo, Stavanger, and Trondheim. Let's have a look at the land cover map for each of the LAU to be considered. We translate the land cover map to the ecosystem typology required by Eurostat. Category 10 (marine inlets and transitional waters) is missing in the Norwegian LCM. This does not matter for the ecosystem service of local climate regulation as we only consider cooling from vegetation, according to the handbook.
+
+```{r,message = FALSE, results = 'hide'}
+gc()
+# then the recategorisation of grunnkartet
+lcm_idf<-read.csv(file.path(d_fp,"Norway_files","Grunnkart",
+                            "Lookup_grunnkart.csv"))
+lcm_idf <- rbind(lcm_idf,c(NA,9900,"unclassified","uklassifisert"))
+lcm_idf$landcover_id <- as.numeric(lcm_idf$landcover_id)
+# make the vector of ecosystem types
+estv<-c("Settlements and other artificial areas",
+        "Cropland",
+        "Grassland",
+        "Forest and woodlands",
+        "Heathlands and shrub",
+        "Sparsely vegetated ecosystems",
+        "Inland wetlands",
+        "Rivers and canals",
+        "Lakes and reservoirs",
+        "Marine inlets and transitional waters",
+        "Coastal beaches, dunes and wetlands",
+        "Marine ecosystems")
+# and add it to our lcm_idf
+lcm_idf['es_type']<-NA
+lcm_idf$es_type[lcm_idf$landcover_id %in% c(100,111,112,121,130,131,132,133,134,135,141,142,152)]<-estv[1] # settlem
+lcm_idf$es_type[lcm_idf$landcover_id %in% c(200)]<-estv[2] # cropl
+lcm_idf$es_type[lcm_idf$landcover_id %in% c(310,320)]<-estv[3] # grassl
+lcm_idf$es_type[lcm_idf$landcover_id %in% c(400,410,420,440)]<-estv[4] # forest
+lcm_idf$es_type[lcm_idf$landcover_id %in% c(520)]<-estv[5] # bush
+lcm_idf$es_type[lcm_idf$landcover_id %in% c(600,611,623,631)]<-estv[6] # sparse
+lcm_idf$es_type[lcm_idf$landcover_id %in% c(720)]<-estv[7] # wetlands
+lcm_idf$es_type[lcm_idf$landcover_id %in% c(810)]<-estv[8] # rivers
+lcm_idf$es_type[lcm_idf$landcover_id %in% c(910)]<-estv[9] # lakes
+# category 10 (marine inlets and transitional waters) doesn't exist
+lcm_idf$es_type[lcm_idf$landcover_id %in% c(1100)]<-estv[11] # coastal
+lcm_idf$es_type[lcm_idf$landcover_id %in% c(1200)]<-estv[12] # marine ecosystems
+#lcm_idf$es_type[lcm_idf$landcover_id %in% c(9900)]<-estv[12] # marine ecosystems
+# make a numeric identifier also
+lcm_idf$es_id <- match(lcm_idf$es_type, unique(estv))
+# then add to raster
+lev <- levels(lcm)[[1]]
+lev$es_id <- lcm_idf$es_id[
+  match(lev$Value, lcm_idf$landcover_id)
+]
+lev$es_type <- lcm_idf$es_type[
+  match(lev$Value, lcm_idf$landcover_id)
+]
+levels(lcm) <- lev
+# so here we can set which category we want to plot. 
+# Can always see which categories we have available by calling cats(lcm)
+activeCat(lcm) <- "es_type"
+rm(lev)
+```
+
+Now as an alternative specification, we create an urban area definition similar to what Statistics Sweden has implemented. This is based on Eurostat raster data that takes in population. All 1km cells that host population of at least 5000 people are included. The area is then buffered by 1km, and subsequently intersected with city LAUs. So we stick to the same cities, but define the boundaries according to population density rather than administrative shapes.
+```{r, message=FALSE, results='hide'}
+# read in high-density cluster raster data
+hdcr<-terra::rast(file.path(d_fp,"..","GISCO","high_density","HDENS_CLST_2021.tif"))
+# read in urban cluster raster data
+ucr<-terra::rast(file.path(d_fp,"..","GISCO","urban_cluster","URBAN_CLST_2021.tif"))
+# force into our geometry
+hdcr<-resample(hdcr,lcm)
+ucr<-resample(ucr,lcm)
+# merge and categorise as binary
+ccr<-hdcr+ucr
+ccr[ccr>0]<-1
+ccr[ccr==0]<-NA
+# buffer by 1km
+ccr_buf<-terra::buffer(ccr,1000)
+ccr_buf <- ifel(ccr_buf,1,NA)
+# make a polygon from it
+urb_pol <- as.polygons(ccr_buf, dissolve = TRUE, na.rm = TRUE)
+# and then mask our city LAUs with this polygon
+cityb_buf_m<-intersect(cityb_buf,urb_pol)
+# tidy up
+rm(hdcr,ucr,ccr,ccr_buf,urb_pol)
+```
+
+Now let's make a plot of all cities, with a blue shade for areas that are included in the stricter urban approach.
+```{r,message = FALSE, results = 'hide', fig.height = 9}
+
+# Make a plot of all cities
+# import street data for better orientation
+roads_list<-list()
+for(i in 1:nrow(cityb_buf)){
+  roads_list[[i]]<-terra::vect(file.path(here::here(),"ancillary_data",
+                                         paste0("roads_",cityb_buf$LAU_ID[i],".shp")))
+}
+names(roads_list)<-cityb_buf$LAU_NAME
+# Let's plot the data
+for(i in 1:nrow(cityb_buf)){
+  plot(mask(crop(lcm, cityb_buf[i,]),cityb_buf[i,]),main=paste(cityb_buf$LAU_NAME[i],"LCM"), legend=T)
+  plot(cityb_buf_m[i,],col="dodgerblue",alpha=0.5, add=T)
+  plot(roads_list[[i]],add=T)
+}
+
+```
+
+
+Now next we need to identify which of these cities have experienced maximum daily temperatures of at least 25 degrees celsius in the reference year of 2024. For this purpose we first download and import Norwegian meteorological data for 2024 covering the four cities. For now I have eyeballed which weather stations fit in which city. Given that we observe maximum temperatures of at least 25 degrees celsius in all of them, the precise selection of weather stations does not really matter.
+```{r,message = FALSE, results='hide'}
+gc()
+# read in meteorogogical data for stations inside the above city LAUs for 2024 -
+tempd <- read.csv(file.path(here::here(),"ancillary_data",
+                            "NO_2024_citylau_dailymaxtemp.csv"),sep=";")
+colnames(tempd)<-c("station_name","station_code","date","maxtemp")
+tempd$maxtemp <- sub(",",".",tempd$maxtemp )
+tempd$maxtemp <- as.numeric(tempd$maxtemp)
+# save all cities with daily temperatures above 25 degrees
+stations<-tempd %>% filter(maxtemp >= 25) %>% select(station_name) %>% unique()
+# check for months in each city
+heatmonths<-list()
+for (i in 1:nrow(stations)){
+  heatmonths[i]<- tempd %>% filter(maxtemp >= 25) %>% filter(station_name==stations[i,1]) %>% select(date) %>% unique()
+}
+names(heatmonths)<-stations[,1]
+for(i in 1:nrow(stations)){
+  print(stations[i,1])
+  print(unique(substr(heatmonths[[i]],4,5)))
+}
+# clean up
+rm(stations,tempd,heatmonths)
+```
+
+So this shows that June and July are the months where we have observed daily max temps exceeding 25 degrees in all weather stations within the cities in question in 2024. August and September are months in which some city LAU have observed max temps exceeding 25 degrees. The Eurostat handbook suggests to use an inclusive approach. We therefore pick all available months for the LST data, which we read in next. Croping and reprojection is done outside of this script, because it is a computationally time-intensive process.
+
+### 3.2.2 LST data
+
+```{r,message = FALSE, results = 'hide'}
+gc()
+# read LST raster file ---------------------------------------------------------
+# Here we have data available for June, July, August, September, and we pick
+# as described above.
+lstr_6_no<-terra::rast(file.path(here::here(),"ancillary_data",
+                                 "lstr_6_no.tif"))
+lstr_7_no<-terra::rast(file.path(here::here(),"ancillary_data",
+                                 "lstr_7_no.tif"))
+lstr_8_no<-terra::rast(file.path(here::here(),"ancillary_data",
+                                 "lstr_8_no.tif"))
+lstr_9_no<-terra::rast(file.path(here::here(),"ancillary_data",
+                                 "lstr_9_no.tif"))
+
+# mask to city LAUs
+lstr_6_no <- mask(crop(lstr_6_no,cityb_buf),cityb_buf)
+lstr_7_no <- mask(crop(lstr_7_no,cityb_buf),cityb_buf)
+lstr_8_no <- mask(crop(lstr_8_no,cityb_buf),cityb_buf)
+lstr_9_no <- mask(crop(lstr_9_no,cityb_buf),cityb_buf)
+
+## MM comment: The unit of the data is Kelvin. Vito has applied the scaling factor
+# that is mentioned here: 
+# https://www.usgs.gov/landsat-missions/landsat-collection-2-surface-temperature
+# You can trace the step in line 131 here
+# https://code.europa.eu/inca/gis-plugins/gis-plugins/-/blob/main/src/inca/localclimate/preprocessing/preprocess_LST.js?ref_type=heads
+# Before running regressions, VITO changes the unit to celsuis. See line 195 here:
+# https://code.europa.eu/inca/gis-plugins/gis-plugins/-/blob/main/src/inca/localclimate/__init__.py?ref_type=heads
+# so we do that here too.
+lstr_6_no <- lstr_6_no - 273.15
+lstr_7_no <- lstr_7_no - 273.15
+lstr_8_no <- lstr_8_no - 273.15
+lstr_9_no <- lstr_9_no - 273.15
+
+# Move LST data all into one stack
+lstr_stack <- c(lstr_6_no,lstr_7_no,lstr_8_no,lstr_9_no)
+rm(lstr_6_no,lstr_7_no,lstr_8_no,lstr_9_no)
+```
+
+Then plot the LST data, to show that it has gaps. We use the land cover map as background. First for June:
+```{r,message = FALSE, results = 'hide', fig.height = 9}
+gc()
+# Let's plot the data
+for(i in 1:nrow(cityb_buf)){
+plot(mask(crop(lcm, cityb_buf[i,]),cityb_buf[i,]),main=paste(cityb_buf$LAU_NAME[i],"June"), legend=F)
+plot(mask(crop(lstr_stack[[1]], cityb_buf[i,]),cityb_buf[i,]),add=T)
+plot(cityb_buf_m[i,],alpha=0.3,col="dodgerblue",add=T)
+plot(roads_list[[i]],add=T)
+}
+```
+
+You see the largets data gaps for Sandnes and Bergen. Also some gaps for Trondheim and Stavanger. Then look at the maps for July:
+```{r,message = FALSE, results = 'hide', fig.height = 9}
+gc()
+# Let's plot the data
+for(i in 1:nrow(cityb_buf)){
+plot(mask(crop(lcm, cityb_buf[i,]),cityb_buf[i,]),main=paste(cityb_buf$LAU_NAME[i],"July"), legend=F)
+plot(mask(crop(lstr_stack[[2]], cityb_buf[i,]),cityb_buf[i,]),add=T)
+plot(cityb_buf_m[i,],alpha=0.3,col="dodgerblue",add=T)
+plot(roads_list[[i]],add=T)
+}
+```
+
+So for month July the largest gaps prevail in the LST data for Sandnes, Trondheim, and Bærum. Also substantial gaps for Oslo and Bergen, and some for Stavanger, Rælingen, and Lørenskog. The gaps do not look much different in the data for the other available months, so I omit plotting those here. I was wondering whether they could occur due to clouds, blanking out parts of the original satellite picture? On the other hand, I notice that some of the gaps look quite similar across months, which makes the cloud hypothesis less likely. In any case, what we could do in a next version is to compute median or mean values across months first, so we get an LST map with the best possible coverage. Given that INCA only reads in one single LST file at a time, I currently stick to the seperate month-wise calculations, to allow comparison of resuts to INCA outputs.
+
+### 3.2.3 TC and EVAP data
+
+Then we read in the other raster files needed. Tree cover density and then evaporation. For evaporation we have the choice between different datasets. One covering July to August, one covering June to August, and a third covering June to September. There is no guidance in the Eurostat handbook on which data to choose. To match the LST data selection, we choose to use June to September.
+
+```{r, message = FALSE, results = 'hide'}
+gc()
+# rough crop
+norcrop <- ext(
+  3.5e6, 5.5e6, # xmin, xmax
+  3.5e6, 5.5e6 # ymin, ymax
+)
+
+# read EVAP raster file --------------------------------------------------------
+evapr<-terra::rast(file.path(d_fp,"version_2026_7",
+                           "inca_input_local_climate_regulation",
+                           "Vegetation_Evapotranspiration","2024",
+                           "interc_transp_2024_Jun-Jul-Aug-Sept.tif"))
+# I have found one funny thing here. The metadata in this raster file includes a
+# scale factor of 0.01. R terra automatically applies this to the values of the 
+# file, so it contains realistic numbers. But the python code in INCA does not
+# apply the scale factor. Therefore, numbers in INCA for evapotranspiration are 
+# 100 times larger than here. For now, I manually change this here, so we have
+# results as close as possible.
+
+# rough crop
+evapr_no <- crop(evapr,norcrop)
+# reproject
+evapr_no <- terra::project(evapr_no,crs(lcm),res=res(evapr_no),method="bilinear")
+# mask to city lau
+evapr_no <- mask(crop(evapr_no,cityb_buf),cityb_buf)
+# evapr_no <- 100*evapr_no # this step to immitate what INCA does (but it actually
+# is not correct)
+# When plotting the resulting map we see that it is a bit patchy, too. Possibly
+# revisit later.
+
+
+# read TCD raster file ---------------------------------------------------------
+tcdr<-terra::rast(file.path(d_fp,"version_2026_7",
+                           "inca_input_local_climate_regulation",
+                           "Tree_Cover_Density","2023",
+                           "TCD_100m_2023_compressed.tif"))
+# rough crop
+tcdr_no <- crop(tcdr,norcrop)
+# reproject
+tcdr_no <- terra::project(tcdr_no,evapr_no)
+# mask to city lau
+tcdr_no <- mask(crop(tcdr_no,cityb_buf),cityb_buf)
+# MM I have checked the resulting data and it looks fine. No gaps.
+
+# reproject lst raster data ----------------------------------------------------
+lstr_stack<-terra::project(lstr_stack,evapr_no)
+
+# tidy up
+rm(tcdr,evapr)
+```
+
+Before we continue on with estimating our models, we first create a spatial mask for each month that represents the valid pixels we can base the model on.
+```{r, message = FALSE, results = 'hide'}
+mask_6_no<-terra::ifel(!is.na(evapr_no) & !is.na(tcdr_no) & !is.na(lstr_stack[[1]]),1,NA)
+mask_7_no<-terra::ifel(!is.na(evapr_no) & !is.na(tcdr_no) & !is.na(lstr_stack[[2]]),1,NA)
+mask_8_no<-terra::ifel(!is.na(evapr_no) & !is.na(tcdr_no) & !is.na(lstr_stack[[3]]),1,NA)
+mask_9_no<-terra::ifel(!is.na(evapr_no) & !is.na(tcdr_no) & !is.na(lstr_stack[[4]]),1,NA)
+
+mask_stack<-c(mask_6_no,mask_7_no,mask_8_no,mask_9_no)
+# then we need lcm, make sure it is aligned with the rest of the raster data
+lcm2 <- resample(lcm,mask_stack,method='near')
+#clean up
+rm(mask_6_no,mask_7_no,mask_8_no,mask_9_no)
+gc()
+```
+
+## 3.3 Run regressions
+
+We loop across cities and across available months here. In each city and month we run a regression where grid cells are units of observation. Predicting LST with TCD and EVAP. We store the resulting coefficients for each city and month.
+```{r, message = FALSE, results = 'hide'}
+gc()
+# months to consider
+mdr<-c(6,7,8,9)
+
+# our dataframe for results
+reg1df<-as.data.frame(matrix(nrow=1,ncol=14))
+colnames(reg1df)<-c("month","city","pixels_in_shp","p_pixels_used","p_pixels_rm",
+                    "p_pixels_rm_due_na_lcm","p_pixels_rm_due_na_data","avg_lst",
+                    "avg_tcd","avg_evap","est_intercept","est_tcd","est_evap",
+                    "R2")
+# function
+first_regression_function<-function(cityshp,lst_rfile,tcd_rfile,evap_rfile){
+  # Step 1: Crop the data to the right shape, stack it, and turn into df
+  estack <- c(
+    crop(lst_rfile, cityshp, mask = TRUE),
+    crop(tcd_rfile, cityshp, mask = TRUE),
+    crop(evap_rfile, cityshp, mask = TRUE))
+  names(estack)<-c("lst","tcd","evap")
+  edf<-as.data.frame(estack)
+  clean_edf <- edf %>% drop_na()
+  rm(estack)
+  # Step 2: Run regression
+  elm <- lm(lst ~ tcd + evap, data = edf)
+  # Step 3: Save relevant info
+  rv<-vector()
+  # total pixel number in shape
+  rv[1] <- mask(crop(init(lst_rfile, 1), cityshp), cityshp) %>% ncell()
+  # proportion of pixels used
+  rv[2] <- nobs(elm) / rv[1]
+  # proportion of pixels removed
+  rv[3] <- 1 - rv[2]
+  # proportion of pixels removed because outside of lcm data
+  rv[4] <- 1 - (nrow(edf) / rv[1])
+  # proportion of pixels removed because of data gaps (lst,tcd,evap)
+  rv[5] <- (nrow(edf) - nobs(elm)) / rv[1]
+  # average land surface temp
+  rv[6] <- mean(clean_edf$lst)
+  # average tree cover density
+  rv[7] <- mean(clean_edf$tcd)
+  # average evapotranspiration
+  rv[8] <- mean(clean_edf$evap)
+  # estimated intercept
+  rv[9] <- elm$coefficients[1]
+  # estimated coefficient on tre cover density
+  rv[10] <- elm$coefficients[2]
+  # estimated coefficient on evaporation
+  rv[11] <- elm$coefficients[3]
+  # model fit
+  rv[12] <- summary(elm)$r.squared
+  # clean up and return result
+  rm(edf,clean_edf,elm)
+  return(rv)
+}
+
+## then loop across months and cities (eurostat version)
+rl<-list()
+for(j in 1:length(mdr)){
+  rl[[j]]<-reg1df
+  for(i in 1:nrow(cityb_buf)){
+    rl[[j]][i,1]<-mdr[j]
+    rl[[j]][i,2]<-as.data.frame(cityb_buf[i,])$LAU_NAME
+    rl[[j]][i,3:14]<-first_regression_function(cityshp = cityb_buf[i,],
+                                lst_rfile = lstr_stack[[j]],
+                                tcd_rfile = tcdr_no,
+                                evap_rfile = evapr_no)
+  }
+}
+firstdf<-do.call("rbind",rl)
+# add city codes
+firstdf <- firstdf %>% 
+  mutate(city_code = cityb_buf$LAU_ID[match(city,cityb_buf$LAU_NAME)]) %>%
+  relocate(city_code,.after=city)
+#clean up
+rm(rl)
+
+## then loop across months and cities (strict urban version)
+rl<-list()
+for(j in 1:length(mdr)){
+  rl[[j]]<-reg1df
+  for(i in 1:nrow(cityb_buf_m)){
+    rl[[j]][i,1]<-mdr[j]
+    rl[[j]][i,2]<-as.data.frame(cityb_buf_m[i,])$LAU_NAME
+    rl[[j]][i,3:14]<-first_regression_function(cityshp = cityb_buf_m[i,],
+                                lst_rfile = lstr_stack[[j]],
+                                tcd_rfile = tcdr_no,
+                                evap_rfile = evapr_no)
+  }
+}
+firstdf_n<-do.call("rbind",rl)
+# add city codes
+firstdf_n <- firstdf_n %>% 
+  mutate(city_code = cityb_buf_m$LAU_ID[match(city,cityb_buf_m$LAU_NAME)]) %>%
+  relocate(city_code,.after=city)
+#clean up
+rm(reg1df,rl)
+```
+
+Print the table, with rounded values (and some less interesting rows and columns removed). Here the Eurostat version.
+```{r}
+# print result table
+kable(firstdf %>% 
+        filter(month %in% c(6,7)) %>%
+        select(-c(p_pixels_rm,p_pixels_rm_due_na_lcm,p_pixels_rm_due_na_data)) %>%
+        mutate(across(where(is.numeric), ~ round(.x, 2))))
+```
+
+And here the version with stricter urban definition.
+```{r}
+# print result table
+kable(firstdf_n %>% 
+        filter(month %in% c(6,7)) %>%
+        select(-c(p_pixels_rm,p_pixels_rm_due_na_lcm,p_pixels_rm_due_na_data)) %>%
+        mutate(across(where(is.numeric), ~ round(.x, 2))))
+```
+
+# 4. Estimate a model of air temp
+
+## 4.1 Overview
+
+In this second step we use weather station data to estimate a linear model of maximum air temperature predicted by local surface temperature and latitude. Here is the unit of observation is weather stations. We save the estimated coefficients.
+
+## 4.2 Import data
+
+Read in a single dataframe containing weather station data. This is the training data from the US.
+
+```{r, message = FALSE, results = 'hide'}
+gc()
+# read in weather station data
+wstd<-read.csv(file.path(d_fp,"version_2026_7",
+                           "inca_input_local_climate_regulation",
+                           "Weather_station_data",
+                           "StationNeighborhood2016.csv"))
+```
+
+## 4.3 Run regression
+
+A single regression to estimate a linear model. Predicting maximum air temperature with local surface temperature and latitude. The model we estimate is: $$ T^{air} = \beta_{2} LST + \gamma_{2}LAT $$
+
+```{r, message = FALSE, results = 'hide'}
+gc()
+# So here we now estimate the model and store the coefficients and adjusted r squared
+wlm <- lm(TempMax ~ st + Ycoor, data = wstd)
+alpha2h <- wlm$coefficients['(Intercept)']
+beta2h <- wlm$coefficients['st']
+gamma2h <- wlm$coefficients['Ycoor']
+wlm_adjr2<-summary(wlm)$adj.r.squared
+# tidy up
+rm(wstd)
+```
+
+Here are model outputs:
+
+```{r}
+summary(wlm)
+rm(wlm)
+```
+
+# 5. Simulate air temp for cities
+
+## 5.1 Overview
+
+Here we now apply the estimated coefficients from the previous two steps to generate simulated data. We do this for each city. 
+
+We first compute for each grid cell $i$ and month $j$ the expected air temperature $\widehat{T}^{air_{obsLSTgreen}}_{j,i}$ given observed conditions.
+
+$$ \widehat{T}^{air_{obsLSTgreen}}_{j,i} = \widehat{\alpha}_{2} + \widehat{\beta}_{2}LST_{j,i} + \widehat{\gamma}_{2} LAT{j,i} $$.
+
+Then we compute for each grid cell $i$ and month $j$ the expected air temperature in a no-vegetation scenario, i.e. where $\widehat{LST}^{zero}_{j,i} = \widehat{\alpha}_{1,j}$ because $TCD = EVAP = 0$ in this case. So
+
+$$ \widehat{T}^{air_{simLSTgray}}_{j,i} = \widehat{\alpha}_{2} + \widehat{\beta}_{2} \widehat{LST}^{zero}_{j,i} + \widehat{\gamma}_{2} LAT_{j,i} $$.
+
+It is important to note that $\widehat{LST}^{zero}_{j,i}$ is constant for each grid cell in a city-month, because we only get one $\widehat{\alpha}_{1,j}$ for each city-month. This again implies that $\widehat{T}^{air_{simLSTgray}}_{j,i}$ actually only varies across the north-south dimension due to varying latitude. The cooling effect is then retrieved for each grid cell $i$ in city $j$ as
+
+$$ \widehat{cooling_{j,i}} = \widehat{T}^{air_{simLSTgray}}_{j,i} - \widehat{T}^{air_{obsLSTgreen}}_{j,i}$$.
+
+Bear in mind that latitude cancels out here, so we are effectively substracting a constant no-vegetation counterfactual from the simulated varying air temperature with vegetation. After plugging in for estimated grid-cell temperature in both secenarios with vegetation and without vegetation, the previous equation simplifies to:
+
+$$ \widehat{cooling}_{j,i} = -\widehat{\beta}_{2} * (LST_{j,i} + \widehat{\alpha}_{1,j})$$
+
+As the formulation shows, cooling is a function of the estimated intercept of the first regression, the estimated coefficient on local surface temperature from the second regression, and the observed local surface temperature data.
+
+## 5.2 Compute cooling (eurostat version)
+
+Make a loop where we compute the cooling for each city in each month. Based on the method, it is possible to get positive and negative cooling values for pixels. The guidance says nothing about that.
+```{r,message = FALSE, results = 'hide'}
+gc()
+
+# make a dataframe from firstdf
+cooldf<-firstdf %>% select(month,city,city_code,pixels_in_shp,p_pixels_used)
+cooldf['T_air_sim']<-NA
+cooldf['T_air_zero_sim']<-NA
+cooldf['average_cooling']<-NA
+cooldf['median_cooling']<-NA
+
+# Project raster to geographic coordinates
+tmp_ll <- project(lstr_stack[[1]], "EPSG:4326")
+# Create latitude raster
+lat_ll <- init(tmp_ll, "y")
+# Back to the original grid
+lat_r <- project(lat_ll, lstr_stack[[1]])
+rm(tmp_ll,lat_ll)
+
+# loop across months and cities
+for(j in 1:length(mdr)){
+  for(i in 1:nrow(cityb_buf)){
+    # Step 1: Move spatial data into dataframe
+    estack <- c(
+      crop(lstr_stack[[j]], cityb_buf[i,], mask = TRUE),
+      crop(tcdr_no, cityb_buf[i,], mask = TRUE),
+      crop(evapr_no, cityb_buf[i,], mask = TRUE),
+      crop(lat_r, cityb_buf[i,], mask = TRUE))
+    names(estack)<-c("lst","tcd","evap","lat")
+    cmdf<-as.data.frame(estack) %>% drop_na()
+    # Step 2: Fill
+    cmdf['alpha1h'] <- firstdf %>% filter(month==mdr[j] & city==cityb_buf$LAU_NAME[i]) %>% select(est_intercept)
+    cmdf['beta1h'] <- firstdf %>% filter(month==mdr[j] & city==cityb_buf$LAU_NAME[i]) %>% select(est_tcd)
+    cmdf['gamma1h'] <- firstdf %>% filter(month==mdr[j] & city==cityb_buf$LAU_NAME[i]) %>% select(est_evap)
+    #cmdf['lst_h'] <-  cmdf$alpha1h + (cmdf$tcd*cmdf$beta1h) + (cmdf$evap*cmdf$gamma1h)
+    cmdf['t_air_h'] <- alpha2h + (cmdf$lst*beta2h) + (cmdf$lat*gamma2h)
+    cmdf['t_air_zero_h'] <- alpha2h + (cmdf$alpha1h*beta2h) + (cmdf$lat*gamma2h)
+    cmdf['cool'] <- cmdf$t_air_zero_h - cmdf$t_air_h
+    # Step 3: Move into cooldf
+    cooldf$T_air_sim[cooldf$month==mdr[j] & cooldf$city==cityb_buf$LAU_NAME[i]] <- mean(cmdf$t_air_h)
+    cooldf$T_air_zero_sim[cooldf$month==mdr[j] & cooldf$city==cityb_buf$LAU_NAME[i]] <- mean(cmdf$t_air_zero_h)
+    cooldf$average_cooling[cooldf$month==mdr[j] & cooldf$city==cityb_buf$LAU_NAME[i]] <- mean(cmdf$cool)
+    cooldf$median_cooling[cooldf$month==mdr[j] & cooldf$city==cityb_buf$LAU_NAME[i]] <- median(cmdf$cool)
+    # Step 4: Clean up
+    rm(estack,cmdf)
+  }
+}
+# save
+cooldf_e<-cooldf
+rm(cooldf)
+```
+
+Here is the resulting table (I only show June and July here, to make results easier to digest)
+```{r}
+# print result table
+kable(cooldf_e %>% filter(month %in% c(6,7)) %>% mutate(across(where(is.numeric), ~ round(.x, 2))))
+```
+
+Comparing these results with INCA outputs shows that we replicate the process quite closely, but not perfectly. I guess that differences mainly come from different geospatial projections. For July, the differences between average cooling from this script and the INCA process vary between 0.003 deg.C for Bergen and 0.09 deg.C for Bærum. For the same month, the differences between median cooling from this script and the INCA process vary between 0.001 deg.C for Bergen and 0.09 deg.C for Bærum.
+
+## 5.3 Compute cooling (strict urban)
+
+Same as in the previous section, but based on the narrower urban definition.
+```{r,message = FALSE, results = 'hide'}
+gc()
+
+# make a dataframe from firstdf
+cooldf<-firstdf_n %>% select(month,city,city_code,pixels_in_shp,p_pixels_used)
+cooldf['T_air_sim']<-NA
+cooldf['T_air_zero_sim']<-NA
+cooldf['average_cooling']<-NA
+cooldf['median_cooling']<-NA
+
+# Project raster to geographic coordinates
+tmp_ll <- project(lstr_stack[[1]], "EPSG:4326")
+# Create latitude raster
+lat_ll <- init(tmp_ll, "y")
+# Back to the original grid
+lat_r <- project(lat_ll, lstr_stack[[1]])
+rm(tmp_ll,lat_ll)
+
+# loop across months and cities
+for(j in 1:length(mdr)){
+  for(i in 1:nrow(cityb_buf_m)){
+    # Step 1: Move spatial data into dataframe
+    estack <- c(
+      crop(lstr_stack[[j]], cityb_buf_m[i,], mask = TRUE),
+      crop(tcdr_no, cityb_buf_m[i,], mask = TRUE),
+      crop(evapr_no, cityb_buf_m[i,], mask = TRUE),
+      crop(lat_r, cityb_buf_m[i,], mask = TRUE))
+    names(estack)<-c("lst","tcd","evap","lat")
+    cmdf<-as.data.frame(estack) %>% drop_na()
+    # Step 2: Fill
+    cmdf['alpha1h'] <- firstdf_n %>% filter(month==mdr[j] & city==cityb_buf_m$LAU_NAME[i]) %>% select(est_intercept)
+    cmdf['beta1h'] <- firstdf_n %>% filter(month==mdr[j] & city==cityb_buf_m$LAU_NAME[i]) %>% select(est_tcd)
+    cmdf['gamma1h'] <- firstdf_n %>% filter(month==mdr[j] & city==cityb_buf_m$LAU_NAME[i]) %>% select(est_evap)
+    #cmdf['lst_h'] <-  cmdf$alpha1h + (cmdf$tcd*cmdf$beta1h) + (cmdf$evap*cmdf$gamma1h)
+    cmdf['t_air_h'] <- alpha2h + (cmdf$lst*beta2h) + (cmdf$lat*gamma2h)
+    cmdf['t_air_zero_h'] <- alpha2h + (cmdf$alpha1h*beta2h) + (cmdf$lat*gamma2h)
+    cmdf['cool'] <- cmdf$t_air_zero_h - cmdf$t_air_h
+    # Step 3: Move into cooldf
+    cooldf$T_air_sim[cooldf$month==mdr[j] & cooldf$city==cityb_buf_m$LAU_NAME[i]] <- mean(cmdf$t_air_h)
+    cooldf$T_air_zero_sim[cooldf$month==mdr[j] & cooldf$city==cityb_buf_m$LAU_NAME[i]] <- mean(cmdf$t_air_zero_h)
+    cooldf$average_cooling[cooldf$month==mdr[j] & cooldf$city==cityb_buf_m$LAU_NAME[i]] <- mean(cmdf$cool)
+    cooldf$median_cooling[cooldf$month==mdr[j] & cooldf$city==cityb_buf_m$LAU_NAME[i]] <- median(cmdf$cool)
+    # Step 4: Clean up
+    rm(estack,cmdf)
+  }
+}
+# save
+cooldf_n<-cooldf
+rm(cooldf)
+```
+
+Here is the resulting table (I only show June and July here, to make results easier to digest)
+```{r}
+# print result table
+kable(cooldf_n %>% filter(month %in% c(6,7)) %>% mutate(across(where(is.numeric), ~ round(.x, 2))))
+```
+
+# 6. Compute aggregated results
+
+## 6.1 Overview
+
+Here we now create results for larger regions and by ecosystem. In INCA this computation is implemented differently than the city-statistics (the rationale behind using different methods for different area extents is unclear to me). So here, INCA creates the air temperature data NOT based on observed LST data, but on estimated LST data. Thinking about it, this approach makes more sense than the one used for the city statistics, because it reduces the potential for bias in the results (we compare modelled LST to modelled LST, rather than modelled LST to observed LST). Analytically, this changes what the result is based on, as I'll show in the next equations.
+
+We first need to construct predicted land surface temperature $\widehat{LST}_{j,i}$ for each grid cell $i$ and month $j$ with our calibrated model coefficients and observed inputs for the right hand side.
+
+$$ \widehat{LST}_{j,i} = \widehat{\alpha}_{1,j} + \widehat{\beta}_{1,j}TCD_{j,i} + \widehat{\gamma}_{1,j}EVAP_{ji}$$
+
+Then we compute for each grid cell $i$ and month $j$ the expected air temperature $\widehat{T}^{air_{simLSTgreen}}_{j,i}$ given simulated conditions.
+
+$$ \widehat{T}^{air_{simLSTgreen}}_{j,i} = \widehat{\alpha}_{2} + \widehat{\beta}_{2} \widehat{LST}_{j,i} + \widehat{\gamma}_{2} LAT{j,i} $$.
+
+Then we compute for each grid cell $i$ and month $j$ the expected air temperature in a no-vegetation scenario, i.e. where $\widehat{LST}^{zero}_{j,i} = \widehat{\alpha}_{1,j}$ because $TCD = EVAP = 0$ in this case. So
+
+$$ \widehat{T}^{air_{simLSTgray}}_{j,i} = \widehat{\alpha}_{2} + \widehat{\beta}_{2} \widehat{LST}^{zero}_{j,i} + \widehat{\gamma}_{2} LAT_{j,i} $$.
+
+Just as is the case for the city-statistics, $\widehat{LST}^{zero}_{j,i}$ is constant for each grid cell in a city-month, because we only get one $\widehat{\alpha}_{1,j}$ for each city-month. The cooling effect is then retrieved for each grid cell $i$ in city $j$ as
+
+$$ \widehat{cooling_{j,i}} = \widehat{T}^{air_{simLSTgray}}_{j,i} - \widehat{T}^{air_{simLSTgreen}}_{j,i}$$.
+
+Again, as for the city statistics, we are effectively subtracting a constant no-vegetation counterfactual from the simulated varying air temperature with vegetation. After plugging in for estimated grid-cell temperature in both secenarios with vegetation and without vegetation, the previous equation simplifies to:
+
+$$ \widehat{cooling}_{j,i} = -\widehat{\beta}_{2} * (\widehat{\beta}_{1,j}TCD_{j,i} + \widehat{\gamma}_{1,j}EVAP_{j,i})$$
+
+As you can see, cooling is now a function of slightly different inputs than what it was for the city-cooling computation. It implies that we do not actually need to use the local surface temperature data rasters when computing the cooling rasters based on fully simulated data. The cooling calculation simplifies to being based on the coefficients from both first and second regressions, as well as the tree cover raster and the evapotranspiration raster. In INCA this analytical simplification step has not been made use of.
+
+## 6.2 Compute cooling rasters
+
+### 6.2.1 Eurostat version
+
+So here we compute cooling rasters based on the method described in the previous section. This we implement as closely as possible to INCA, but without inheriting INCA's bug using wrong coefficients. We also exclude water ecosystems from the computation as instructed by the handbook (INCA does not do this). As the Norwegian LCM does not include ecosystem "Marine inlets" in the first place, this means that we only need to exclude "Rivers and canals", "Lakes and reservoirs", and "Marine ecosystems".
+
+```{r,message = FALSE, results = 'hide'}
+gc()
+### We run this as a loop across months and cities. Following INCA's python implementation as close as possible
+cooling_list_m <- vector("list", length(mdr))
+for(j in 1:length(mdr)){
+  # make a list for the city-wise cooling rasters
+  cooling_list <- vector("list", nrow(cityb_buf))
+  for(i in 1:nrow(cityb_buf)){
+    # get lcm
+    tmp_lcm <- crop(lcm2,cityb_buf[i,],mask=T)
+    tmp_lcm[tmp_lcm %in% c(810,910,1200)]<-NA # rivers, lakes, sea, are set to NA
+    # get coefficients
+    alpha1h_ <- firstdf$est_intercept[firstdf$month==mdr[j] & firstdf$city==cityb_buf$LAU_NAME[i]]
+    beta1h_ <- firstdf$est_tcd[firstdf$month==mdr[j] & firstdf$city==cityb_buf$LAU_NAME[i]]
+    gamma1h_ <- firstdf$est_evap[firstdf$month==mdr[j] & firstdf$city==cityb_buf$LAU_NAME[i]]
+    # create simulated lst rasters
+    lst_sim_green_ <- alpha1h_ + beta1h_*crop(tcdr_no,cityb_buf[i,],mask=T) + gamma1h_*crop(evapr_no,cityb_buf[i,],mask=T)
+    lst_sim_gray_ <- alpha1h_ + 0*crop(tcdr_no,cityb_buf[i,],mask=T) + 0*crop(evapr_no,cityb_buf[i,],mask=T)
+    # create simulated air temp rasters
+    t_air_green_ <- alpha2h + beta2h*lst_sim_green_ + gamma2h*crop(lat_r,cityb_buf[i,],mask=T)
+    t_air_gray_ <- alpha2h + beta2h*lst_sim_gray_ + gamma2h*crop(lat_r,cityb_buf[i,],mask=T)
+    # cooling
+    cooling_ <- t_air_gray_ - t_air_green_
+    # as in INCA we force negative values to be zero
+    cooling_[cooling_<0] <- 0
+    # unlike in INCA (but as requested in the hanbook) we set cooling of water bodies to NA
+    cooling_[is.na(tmp_lcm)] <- NA
+    # save in stack
+    cooling_list[[i]]<-cooling_
+    # tidy up
+    rm(alpha1h_,beta1h_,gamma1h_,lst_sim_gray_,lst_sim_green_,t_air_gray_,t_air_green_,cooling_,tmp_lcm)
+  }
+  # in this function now we put the cities together and impose the mean cooling for the overlapping boundaries
+  cooling_list_m[[j]] <- do.call(terra::mosaic,c(cooling_list,fun=mean))
+  # save
+  writeRaster(cooling_list_m[[j]],file.path(rfp,paste0("cooling_",j,".tif")),overwrite=T)
+}
+cooling_stack<-terra::rast(cooling_list_m)
+names(cooling_stack)<-mdr
+cooling_stack_e <- cooling_stack
+rm(cooling_list_m,cooling_stack)
+```
+
+Plots for July
+```{r,message = FALSE, results = 'hide', fig.height = 8}
+j=2
+for(i in 1:nrow(cityb_buf)){
+   plot(crop(lcm,cityb[i,],mask=T),legend=F)
+  plot(crop(cooling_stack_e[[j]], cityb_buf[i,],mask=T), main=paste(cityb_buf$LAU_NAME[i],"cooling","month",mdr[j]),add=T,legend=T)
+  plot(roads_list[[i]],add=T)
+}
+```
+
+### 6.2.2 Strict urban version
+
+```{r,message = FALSE, results = 'hide'}
+gc()
+### We run this as a loop across months and cities. Following INCA's python implementation as close as possible
+cooling_list_m <- vector("list", length(mdr))
+for(j in 1:length(mdr)){
+  # make a list for the city-wise cooling rasters
+  cooling_list <- vector("list", nrow(cityb_buf_m))
+  for(i in 1:nrow(cityb_buf_m)){
+    # get lcm
+    tmp_lcm <- crop(lcm2,cityb_buf_m[i,],mask=T)
+    tmp_lcm[tmp_lcm %in% c(810,910,1200)]<-NA # rivers, lakes, sea, are set to NA
+    # get coefficients
+    alpha1h_ <- firstdf_n$est_intercept[firstdf_n$month==mdr[j] & firstdf_n$city==cityb_buf_m$LAU_NAME[i]]
+    beta1h_ <- firstdf_n$est_tcd[firstdf_n$month==mdr[j] & firstdf_n$city==cityb_buf_m$LAU_NAME[i]]
+    gamma1h_ <- firstdf_n$est_evap[firstdf_n$month==mdr[j] & firstdf_n$city==cityb_buf_m$LAU_NAME[i]]
+    # create simulated lst rasters
+    lst_sim_green_ <- alpha1h_ + beta1h_*crop(tcdr_no,cityb_buf_m[i,],mask=T) + gamma1h_*crop(evapr_no,cityb_buf_m[i,],mask=T)
+    lst_sim_gray_ <- alpha1h_ + 0*crop(tcdr_no,cityb_buf_m[i,],mask=T) + 0*crop(evapr_no,cityb_buf_m[i,],mask=T)
+    # create simulated air temp rasters
+    t_air_green_ <- alpha2h + beta2h*lst_sim_green_ + gamma2h*crop(lat_r,cityb_buf_m[i,],mask=T)
+    t_air_gray_ <- alpha2h + beta2h*lst_sim_gray_ + gamma2h*crop(lat_r,cityb_buf_m[i,],mask=T)
+    # cooling
+    cooling_ <- t_air_gray_ - t_air_green_
+    # as in INCA we force negative values to be zero
+    cooling_[cooling_<0] <- 0
+    # unlike in INCA (but as requested in the hanbook) we set cooling of water bodies to NA
+    cooling_[is.na(tmp_lcm)] <- NA
+    # save in stack
+    cooling_list[[i]]<-cooling_
+    # tidy up
+    rm(alpha1h_,beta1h_,gamma1h_,lst_sim_gray_,lst_sim_green_,t_air_gray_,t_air_green_,cooling_,tmp_lcm)
+  }
+  # in this function now we put the cities together and impose the mean cooling for the overlapping boundaries
+  cooling_list_m[[j]] <- do.call(terra::mosaic,c(cooling_list,fun=mean))
+  # save
+  writeRaster(cooling_list_m[[j]],file.path(rfp,paste0("cooling_n_",j,".tif")),overwrite=T)
+}
+cooling_stack<-terra::rast(cooling_list_m)
+names(cooling_stack)<-mdr
+cooling_stack_n <- cooling_stack
+rm(cooling_list_m,cooling_stack)
+```
+
+Plots for July
+```{r,message = FALSE, results = 'hide', fig.height = 8}
+j=2
+for(i in 1:nrow(cityb_buf_m)){
+  plot(crop(lcm,cityb[i,],mask=T),legend=F)
+  plot(crop(cooling_stack_n[[j]], cityb_buf[i,],mask=T),main=paste(cityb_buf$LAU_NAME[i],"cooling","month",mdr[j]), add=T,legend=T)
+  plot(roads_list[[i]],add=T)
+}
+```
+
+## 6.3 Supply tables
+
+### 6.3.1 Eurostat version
+
+So here now we aggregate the cooling rasters by NUTS2 area, NUTS0 area, and ecosystem type. The 150m buffers imply that those NUTS2 areas that do not include city LAUs but that do have a border with city LAUs, do include cooling pixels. INCA does not address this problem. We set those cases to zero.
+
+The indicators we report in our supply and use tables are what INCA calls "simple average" for the by-ecosystem values and what INCA calls "weighted average" for cooling across all ecosystem types.
+
+```{r,message = FALSE, results = 'hide'}
+gc()
+# now cooling by nuts and ecosystem
+# Import Norway NUTs2 shape
+n2shp<-terra::vect(file.path(d_fp,"Norway_files","NUTS2021_NO_LVL2_wosvalbard","NUTS2021_NO_LVL2_wos.shp"))
+n2shp <- project(n2shp,crs(lcm))
+# rasterize the shape
+n2r_no <- terra::rasterize(n2shp,mask_stack,field="NUTS_ID")
+# now make a loop across months
+stl<-list()
+for(j in 1:length(mdr)){
+  # Step 1: Make a stack of the relevant data and move it into a dataframe
+  astack <- c(
+  cooling_stack_e[[j]],
+  n2r_no,
+  lcm2)
+  names(astack)<-c("cooling","region","lcm")
+  adf<-as.data.frame(astack)
+  clean_adf <- adf %>% drop_na()
+  # Step 2: Retrieve all the different summary statistics we want
+  # means by region and ecosystem type
+  mean_by_region_es <- clean_adf %>% 
+    group_by(region,lcm) %>% 
+    summarise(cooling = mean(cooling))
+  mean_by_es <- clean_adf %>% 
+    select(-region) %>% 
+    group_by(lcm) %>% 
+    summarise(cooling = mean(cooling)) %>%
+    mutate(region = "NO") %>%
+    relocate(region,.before=lcm)
+  # total means by NUTS2
+  mean_by_region <- clean_adf %>% 
+    group_by(region) %>% 
+    summarise(cooling = mean(cooling)) %>% 
+    mutate(lcm="All") %>%
+    relocate(lcm,.after=region)
+  # total mean for the whole country NUTS0
+  mean_overall <- clean_adf %>% select(cooling) %>% 
+    summarise(cooling=mean(cooling)) %>%
+    mutate(region = "NO",lcm = "All") %>%
+    relocate(cooling,.after =lcm)
+  # put together
+  mean_vals <- rbind(mean_by_es,mean_overall,mean_by_region_es,mean_by_region) %>% 
+    filter(region !="NO09") %>% 
+    pivot_wider(names_from=lcm,values_from = cooling) %>%
+    left_join(n2shp %>% as.data.frame() %>% select(NUTS_ID,NUTS_NAME),
+            by = join_by(region == NUTS_ID)) %>%
+    rename(Name = NUTS_NAME) %>%
+    relocate(Name,.after=region) %>%
+    rename(Region = region)
+  mean_vals$Name[mean_vals$Region=="NO"]<-"Norge"
+  # put into our list
+  stl[[j]]<-mean_vals
+  # Step 3: clean up
+  rm(astack,adf,clean_adf,mean_overall,mean_by_region,mean_by_es,mean_by_region_es,mean_vals)
+}
+names(stl)<-mdr
+stl_e<-stl
+rm(stl)
+```
+
+Here are the results for June (rounded)
+```{r}
+kable(stl_e[[1]] %>% mutate(across(where(is.numeric), ~ round(.x, 2))))
+```
+
+Here are the results for July (rounded)
+```{r}
+kable(stl_e[[2]] %>% mutate(across(where(is.numeric), ~ round(.x, 2))))
+```
+
+### 6.3.2 Strict urban version
+
+Same as in the previous section, but based on stricter urban definition.
+```{r,message = FALSE, results = 'hide'}
+gc()
+# now cooling by nuts and ecosystem
+# Import Norway NUTs2 shape
+n2shp<-terra::vect(file.path(d_fp,"Norway_files","NUTS2021_NO_LVL2_wosvalbard","NUTS2021_NO_LVL2_wos.shp"))
+n2shp <- project(n2shp,crs(lcm))
+# rasterize the shape
+n2r_no <- terra::rasterize(n2shp,mask_stack,field="NUTS_ID")
+# need to extend the stricter version so it is as large as the previous map
+# this just adds NA colums on the right and on the left.
+cooling_stack_n <- extend(
+  cooling_stack_n,
+  ext(cooling_stack_e)
+)
+# now make a loop across months
+stl<-list()
+for(j in 1:length(mdr)){
+  # Step 1: Make a stack of the relevant data and move it into a dataframe
+  astack <- c(
+  cooling_stack_n[[j]],
+  n2r_no,
+  lcm2)
+  names(astack)<-c("cooling","region","lcm")
+  adf<-as.data.frame(astack)
+  clean_adf <- adf %>% drop_na()
+  # Step 2: Retrieve all the different summary statistics we want
+  # means by region and ecosystem type
+  mean_by_region_es <- clean_adf %>% 
+    group_by(region,lcm) %>% 
+    summarise(cooling = mean(cooling))
+  mean_by_es <- clean_adf %>% 
+    select(-region) %>% 
+    group_by(lcm) %>% 
+    summarise(cooling = mean(cooling)) %>%
+    mutate(region = "NO") %>%
+    relocate(region,.before=lcm)
+  # total means by NUTS2
+  mean_by_region <- clean_adf %>% 
+    group_by(region) %>% 
+    summarise(cooling = mean(cooling)) %>% 
+    mutate(lcm="All") %>%
+    relocate(lcm,.after=region)
+  # total mean for the whole country NUTS0
+  mean_overall <- clean_adf %>% select(cooling) %>% 
+    summarise(cooling=mean(cooling)) %>%
+    mutate(region = "NO",lcm = "All") %>%
+    relocate(cooling,.after =lcm)
+  # put together
+  mean_vals <- rbind(mean_by_es,mean_overall,mean_by_region_es,mean_by_region) %>% 
+    filter(region !="NO09") %>% 
+    pivot_wider(names_from=lcm,values_from = cooling) %>%
+    left_join(n2shp %>% as.data.frame() %>% select(NUTS_ID,NUTS_NAME),
+            by = join_by(region == NUTS_ID)) %>%
+    rename(Name = NUTS_NAME) %>%
+    relocate(Name,.after=region) %>%
+    rename(Region = region)
+  mean_vals$Name[mean_vals$Region=="NO"]<-"Norge"
+  # put into our list
+  stl[[j]]<-mean_vals
+  # Step 3: clean up
+  rm(astack,adf,clean_adf,mean_overall,mean_by_region,mean_by_es,mean_by_region_es,mean_vals)
+}
+names(stl)<-mdr
+stl_n<-stl
+rm(stl)
+```
+
+Here are the results for June (rounded)
+```{r}
+kable(stl_n[[1]] %>% mutate(across(where(is.numeric), ~ round(.x, 2))))
+```
+
+Here are the results for July (rounded)
+```{r}
+kable(stl_n[[2]] %>% mutate(across(where(is.numeric), ~ round(.x, 2))))
+```
+
+## 6.4 Ecosystem contribution tables
+
+### 6.4.1 Eurostat version
+
+To show how different ecosystems contribute to total cooling in each region, we construct seperate tables to show a decomposition of the (weighted) averages reported in the above section. This is what INCA calls "weighted average" for the by-ecosystem values. The decomposed values are not very insightful on their own, because they reflect the proportion of different ecosystems in each region (if the region consists predominantly of forest, forest will have the largest contribution to cooling). The cooling effectiveness of different ecosystems is much better captured by the values reported in the previous section.
+
+```{r,message = FALSE, results = 'hide'}
+gc()
+# decomposed total cooling by ecosystem for each region
+# now make a loop across months
+cstl<-list()
+for(j in 1:length(mdr)){
+  # Step 1: Make a stack of the relevant data and move it into a dataframe
+astack <- c(
+  cooling_stack_e[[j]],
+  n2r_no,
+  lcm2)
+names(astack)<-c("cooling","region","lcm")
+adf<-as.data.frame(astack)
+clean_adf <- adf %>% drop_na()
+# Step 2: Retrieve all the different summary statistics we want
+# means by region and ecosystem type
+mean_by_region_es <- clean_adf %>% 
+  group_by(region,lcm) %>% 
+  summarise(cooling = mean(cooling))
+mean_by_es <- clean_adf %>% 
+  select(-region) %>% 
+  group_by(lcm) %>% 
+  summarise(cooling = mean(cooling)) %>%
+  mutate(region = "NO") %>%
+  relocate(region,.before=lcm)
+# weights
+weights_by_region_es<-clean_adf %>% group_by(region) %>% count(lcm) %>% mutate(weight = n/sum(n)) %>% ungroup()
+weights_overall_es<-clean_adf %>% count(lcm) %>% mutate(weight = n/sum(n)) %>% ungroup()
+
+# put together
+decomp_by_region_es <- mean_by_region_es %>% left_join(weights_by_region_es) %>%
+  mutate(dcmp_cooling = cooling * weight)
+decomp_overall_es <- mean_by_es %>% left_join(weights_overall_es) %>%
+  mutate(dcmp_cooling = cooling * weight)
+decomp_vals <- rbind(decomp_overall_es,decomp_by_region_es) %>% 
+  filter(region !="NO09") %>% 
+  select(-c(n,weight,cooling)) %>%
+  pivot_wider(names_from=lcm,values_from = dcmp_cooling) %>%
+  left_join(n2shp %>% as.data.frame() %>% select(NUTS_ID,NUTS_NAME),
+            by = join_by(region == NUTS_ID)) %>%
+  rename(Name = NUTS_NAME) %>%
+  relocate(Name,.after=region) %>%
+  rename(Region = region) %>%
+  mutate(All = rowSums(across(`Settlements and other artificial areas`:`Coastal beaches, dunes and wetlands`)))
+decomp_vals$Name[decomp_vals$Region=="NO"]<-"Norge"
+  # put into our list
+  cstl[[j]]<-decomp_vals
+  # Step 3: clean up
+  rm(astack,adf,clean_adf,mean_by_es,mean_by_region_es,decomp_vals,decomp_overall_es,decomp_by_region_es,weights_overall_es,weights_by_region_es)
+}
+names(cstl)<-mdr
+cstl_e<-cstl
+rm(cstl)
+```
+
+Here are the contribution results for June (rounded)
+```{r}
+kable(cstl_e[[1]] %>% mutate(across(where(is.numeric), ~ round(.x, 2))))
+```
+
+Here are the contribution results for July (rounded)
+```{r}
+kable(cstl_e[[2]] %>% mutate(across(where(is.numeric), ~ round(.x, 2))))
+```
+
+### 6.4.2 Strict urban version
+
+Same as in the previous version, but now based on strict urban areas.
+```{r,message = FALSE, results = 'hide'}
+gc()
+# decomposed total cooling by ecosystem for each region
+# now make a loop across months
+cstl<-list()
+for(j in 1:length(mdr)){
+  # Step 1: Make a stack of the relevant data and move it into a dataframe
+astack <- c(
+  cooling_stack_n[[j]],
+  n2r_no,
+  lcm2)
+names(astack)<-c("cooling","region","lcm")
+adf<-as.data.frame(astack)
+clean_adf <- adf %>% drop_na()
+# Step 2: Retrieve all the different summary statistics we want
+# means by region and ecosystem type
+mean_by_region_es <- clean_adf %>% 
+  group_by(region,lcm) %>% 
+  summarise(cooling = mean(cooling))
+mean_by_es <- clean_adf %>% 
+  select(-region) %>% 
+  group_by(lcm) %>% 
+  summarise(cooling = mean(cooling)) %>%
+  mutate(region = "NO") %>%
+  relocate(region,.before=lcm)
+# weights
+weights_by_region_es<-clean_adf %>% group_by(region) %>% count(lcm) %>% mutate(weight = n/sum(n)) %>% ungroup()
+weights_overall_es<-clean_adf %>% count(lcm) %>% mutate(weight = n/sum(n)) %>% ungroup()
+
+# put together
+decomp_by_region_es <- mean_by_region_es %>% left_join(weights_by_region_es) %>%
+  mutate(dcmp_cooling = cooling * weight)
+decomp_overall_es <- mean_by_es %>% left_join(weights_overall_es) %>%
+  mutate(dcmp_cooling = cooling * weight)
+decomp_vals <- rbind(decomp_overall_es,decomp_by_region_es) %>% 
+  filter(region !="NO09") %>% 
+  select(-c(n,weight,cooling)) %>%
+  pivot_wider(names_from=lcm,values_from = dcmp_cooling) %>%
+  left_join(n2shp %>% as.data.frame() %>% select(NUTS_ID,NUTS_NAME),
+            by = join_by(region == NUTS_ID)) %>%
+  rename(Name = NUTS_NAME) %>%
+  relocate(Name,.after=region) %>%
+  rename(Region = region) %>%
+  mutate(All = rowSums(across(`Settlements and other artificial areas`:`Coastal beaches, dunes and wetlands`)))
+decomp_vals$Name[decomp_vals$Region=="NO"]<-"Norge"
+  # put into our list
+  cstl[[j]]<-decomp_vals
+  # Step 3: clean up
+  rm(astack,adf,clean_adf,mean_by_es,mean_by_region_es,decomp_vals,decomp_overall_es,decomp_by_region_es,weights_overall_es,weights_by_region_es)
+}
+names(cstl)<-mdr
+cstl_n<-cstl
+rm(cstl)
+```
+
+Here are the contribution results for June (rounded)
+```{r}
+kable(cstl_n[[1]] %>% mutate(across(where(is.numeric), ~ round(.x, 2))))
+```
+
+Here are the contribution results for July (rounded)
+```{r}
+kable(cstl_n[[2]] %>% mutate(across(where(is.numeric), ~ round(.x, 2))))
+```
+
+## 6.5 Use tables
+
+### 6.5.1 Eurostat version
+
+```{r}
+utl<-list()
+for(j in 1:length(mdr)){
+  utl[[j]]<-stl_e[[j]] %>% 
+    select(c(Region,Name,All)) %>% 
+    mutate(`Intermediate consumption by industries` = NA) %>%
+    mutate(`Government final consumption` = NA) %>%
+    mutate(`Households final consumption` = All) %>%
+    mutate(`Gross capital formation` = NA) %>%
+    mutate(Exports = NA) %>%
+    rename(Total = All)
+}
+names(utl)<-mdr
+utl_e<-utl
+rm(utl)
+```
+
+Here are the results for June (rounded)
+```{r}
+kable(utl_e[[1]] %>% mutate(across(where(is.numeric), ~ round(.x, 2))))
+```
+
+Here are the results for July (rounded)
+```{r}
+kable(utl_e[[2]] %>% mutate(across(where(is.numeric), ~ round(.x, 2))))
+```
+
+### 6.5.2 Strict urban version
+
+```{r}
+utl<-list()
+for(j in 1:length(mdr)){
+  utl[[j]]<-stl_n[[j]] %>% 
+    select(c(Region,Name,All)) %>% 
+    mutate(`Intermediate consumption by industries` = NA) %>%
+    mutate(`Government final consumption` = NA) %>%
+    mutate(`Households final consumption` = All) %>%
+    mutate(`Gross capital formation` = NA) %>%
+    mutate(Exports = NA) %>%
+    rename(Total = All)
+}
+names(utl)<-mdr
+utl_n<-utl
+rm(utl)
+```
+
+Here are the results for June (rounded)
+```{r}
+kable(utl_n[[1]] %>% mutate(across(where(is.numeric), ~ round(.x, 2))))
+```
+
+Here are the results for July (rounded)
+```{r}
+kable(utl_n[[2]] %>% mutate(across(where(is.numeric), ~ round(.x, 2))))
+```
+
+# 7. Problems with INCA
+
+While working on this replication of the INCA process in R, to quantify the ecosystem service of local climate regulation for Norway, I have identified several potential and definite problems in the INCA code. I will go through them here.
+
+## 7.1 Analytical inconsistency between city-level and region-level calculations
+The computation of cooling in individual cities analytically differs from the computation of cooling across cities in regions. I suspect that this inconsistency is not intended. The former is based on comparing real-world observed LST to a simulated no-vegetation LST, while the latter is based on comparing simulated LST with vegetation to simulated no-vegetation LST. Due to this inconsistency, the city-level results cannot be compared to the region-level results.
+
+## 7.2 Bug in the region-level calculations
+The regional statistics are based on raster maps of cooling. The computation of those raster maps should be based on the calibrated linear models. However, INCA draws from other inputs because the code uses column indices rather than column names (see function raster_consolidation in lines 491ff here https://code.europa.eu/inca/gis-plugins/gis-plugins/-/blob/main/src/inca/localclimate/__init__.py?ref_type=heads). So unfortunately, I believe that the creation of the cooling rasters are based on inputs that do not represent the intended model coefficients. INCA uses mean tree cover as alpha1h, cooling_mean as beta1h and cooling median as gamma1h. Then it uses alpha1h as alpha 2h, beta1h as beta2h, and gamma1h as gamma2h. I was able to roughly recreate INCA’s cooling maps using the same incorrect inputs in my quantification script in R. They provide strongly upward biased results.
+
+## 7.3 Handling of water bodies
+The handbook specifies that the cooling effect of water ecosystems should be reported as zero (point 10.4 in chapter 10). INCA does not do this, and therefore, totals across ecosystem types are informed by both valid results (terrestrial cooling) and invalid results (water cooling). In our computation of regional statistics, we set those areas to NA, to stick to the handbook.
+
+## 7.4 Major data gaps in LST data are hidden
+The regression coefficients and city-cooling results are based on a data population that is NA for all pixels where at least one of the input data rasters (LST, TCD, EVAP) is NA. The big gaps in the LST data therefore imply that the results are valid only for a small subset of the city areas in some cities and months. Now in the calculation of regional results and by ecosystem, because the computation uses simulated LST instead of observed LST, the data population is substantially larger. It does not inherit the LST data gaps. This risks creating a false perception of precision, because for some of the areas, the simulations are informed by only a small, and possibly severely unrepresentative subset of the actual area.
+
+## 7.5 Possibly unintended side-effects of city buffers
+Due to the 150m buffers around cities, the shapes of individual cities that are located next to each other (e.g. Oslo, Lørenskog and Rælingen) actually overlap. In my view, the regional statistics should ideally be based on modified shapes without overlaps. So that the overlaps do not create weird average values for border regions. INCA, however, does not take explicit care of this problem. For the time being, we follow INCA in our current implementation in that we apply average cooling values for the overlapping areas. 
+
+Another side effect of the buffers is that those NUTS2 areas that do not include city LAUs but that do have a border with city LAUs, do include cooling pixels. INCA does not address this problem and therefore reports cooling for area NO09 (Agder og Sør-Østlandet), even though there is no city-LAU in that region. We set those cases to zero in our implementation.
+
+## 7.6 Read-in of evapotranspiration data
+The metadata in the evapotranspiration raster file includes a scale factor of 0.01. R terra automatically applies this scale factor to the values of the file, so it contains realistic numbers. But the python code in INCA does not apply this scale factor. Therefore, numbers in INCA for evapotranspiration are 100 times larger than what they are meant to be. Given that it is a constant scale factor, this has not impact on the results, but it makes the coefficients less intuitive to read.
+
+## 7.7 Handling of negative cooling
+Here we have a further possible inconsistency between the city-statistics and the regional statistics. The process to compute cooling returns negative cooling values for some pixels. It does so in both analytical approaches mentioned in point 1. In the regional computations these negative values are forced to zero. In the city computations they are not. We do the same in our quantification, to allow comparability to INCA’s results, but emphasise that it would make some sense to set negative cooling to zero also in the city-wise implementation, given that we are trying to measure contribution to cooling and not to heating. The model is not designed to measure heating.
+
+# 8. Ideas for improvements
+
+Several ideas, including:
+
+- Use alternative LST data with better coverage, or otherwise a median or mean map of LST across months to minimise coverage gaps.
+- Include more controls in the regression models. To change the cooling results, the controls would have to capture something that is currently (unintentionally) captured by vegetation. 
