@@ -17,7 +17,7 @@ table {
 
 Magnus Merkle (SSB)
 
-Naturregnskapsprosjekt, 21. September 2026
+Naturregnskapsprosjekt, 22. September 2026
 
 Please do not share. This is work in progress.
 
@@ -345,9 +345,8 @@ mask_heat_fun<-function(inputurbanshape,lcm,heatrast){
 # apply function
 cityb_l<-list()
 cityb_buf_l<-list()
+cityb_buf_m_l<-list()
 citytownb_l<-list()
-#citytownb_buf_l<-list()
-#citytownb_buf_m_l<-list()
 mdr=c(6,7,8,9)
 for(j in 1:length(mdr)){
   cityb_l[[j]]<-mask_heat_fun(inputurbanshape=cityb,
@@ -358,18 +357,15 @@ for(j in 1:length(mdr)){
                     lcm=lcm,
                     heatrast=terra::rast(file.path(here::here(),"ancillary_data",paste0("heatdays_",j,".tif")))
                     )
+  cityb_buf_m_l[[j]]<-mask_heat_fun(inputurbanshape=cityb_buf_m,
+                    lcm=lcm,
+                    heatrast=terra::rast(file.path(here::here(),"ancillary_data",paste0("heatdays_",j,".tif")))
+                    )
   citytownb_l[[j]]<-mask_heat_fun(inputurbanshape=citytownb,
                     lcm=lcm,
                     heatrast=terra::rast(file.path(here::here(),"ancillary_data",paste0("heatdays_",j,".tif")))
                     )
-  # citytownb_buf_l[[j]]<-mask_heat_fun(inputurbanshape=citytownb_buf,
-  #                   lcm=lcm,
-  #                   heatrast=terra::rast(file.path(here::here(),"ancillary_data",paste0("heatdays_",j,".tif")))
-  #                   )
-  # citytownb_buf_m_l[[j]]<-mask_heat_fun(inputurbanshape=citytownb_buf_m,
-  #                   lcm=lcm,
-  #                   heatrast=terra::rast(file.path(here::here(),"ancillary_data",paste0("heatdays_",j,".tif")))
-  #                   )
+
 }
 ```
 
@@ -868,21 +864,21 @@ gc()
 cooling_list_m <- vector("list", length(mdr))
 for(j in 1:length(mdr)){
   # make a list for the city-wise cooling rasters
-  cooling_list <- vector("list", nrow(cityb_buf))
-  for(i in 1:nrow(cityb_buf)){
+  cooling_list <- vector("list", nrow(cityb_buf_l[[j]]))
+  for(i in 1:nrow(cityb_buf_l[[j]])){
     # get lcm
-    tmp_lcm <- crop(lcm2,cityb_buf[i,],mask=T)
+    tmp_lcm <- crop(lcm2,cityb_buf_l[[j]][i,],mask=T)
     tmp_lcm[tmp_lcm %in% c(810,910,1200)]<-NA # rivers, lakes, sea, are set to NA
     # get coefficients
-    alpha1h_ <- firstdf$est_intercept[firstdf$month==mdr[j] & firstdf$city==cityb_buf$LAU_NAME[i]]
-    beta1h_ <- firstdf$est_tcd[firstdf$month==mdr[j] & firstdf$city==cityb_buf$LAU_NAME[i]]
-    gamma1h_ <- firstdf$est_evap[firstdf$month==mdr[j] & firstdf$city==cityb_buf$LAU_NAME[i]]
+    alpha1h_ <- firstdf$est_intercept[firstdf$month==mdr[j] & firstdf$city==cityb_buf_l[[j]]$LAU_NAME[i]]
+    beta1h_ <- firstdf$est_tcd[firstdf$month==mdr[j] & firstdf$city==cityb_buf_l[[j]]$LAU_NAME[i]]
+    gamma1h_ <- firstdf$est_evap[firstdf$month==mdr[j] & firstdf$city==cityb_buf_l[[j]]$LAU_NAME[i]]
     # create simulated lst rasters
-    lst_sim_green_ <- alpha1h_ + beta1h_*crop(tcdr_no,cityb_buf[i,],mask=T) + gamma1h_*crop(evapr_no,cityb_buf[i,],mask=T)
-    lst_sim_gray_ <- alpha1h_ + 0*crop(tcdr_no,cityb_buf[i,],mask=T) + 0*crop(evapr_no,cityb_buf[i,],mask=T)
+    lst_sim_green_ <- alpha1h_ + beta1h_*crop(tcdr_no,cityb_buf_l[[j]][i,],mask=T) + gamma1h_*crop(evapr_no,cityb_buf_l[[j]][i,],mask=T)
+    lst_sim_gray_ <- alpha1h_ + 0*crop(tcdr_no,cityb_buf_l[[j]][i,],mask=T) + 0*crop(evapr_no,cityb_buf_l[[j]][i,],mask=T)
     # create simulated air temp rasters
-    t_air_green_ <- alpha2h + beta2h*lst_sim_green_ + gamma2h*crop(lat_r,cityb_buf[i,],mask=T)
-    t_air_gray_ <- alpha2h + beta2h*lst_sim_gray_ + gamma2h*crop(lat_r,cityb_buf[i,],mask=T)
+    t_air_green_ <- alpha2h + beta2h*lst_sim_green_ + gamma2h*crop(lat_r,cityb_buf_l[[j]][i,],mask=T)
+    t_air_gray_ <- alpha2h + beta2h*lst_sim_gray_ + gamma2h*crop(lat_r,cityb_buf_l[[j]][i,],mask=T)
     # cooling
     cooling_ <- t_air_gray_ - t_air_green_
     # as in INCA we force negative values to be zero
@@ -896,6 +892,8 @@ for(j in 1:length(mdr)){
   }
   # in this function now we put the cities together and impose the mean cooling for the overlapping boundaries
   cooling_list_m[[j]] <- do.call(terra::mosaic,c(cooling_list,fun=mean))
+  # make sure extents align (when some urban areas are masked because of lack of heat, then it can happen that extent is smaller than usual)
+  cooling_list_m[[j]] <- terra::extend(cooling_list_m[[j]],terra::ext(lcm))
   # save
   writeRaster(cooling_list_m[[j]],file.path(rfp,paste0("cooling_",j,".tif")),overwrite=T)
 }
@@ -908,9 +906,9 @@ rm(cooling_list_m,cooling_stack)
 Plots for July
 ```{r,message = FALSE, results = 'hide', fig.height = 8}
 j=2
-for(i in 1:nrow(cityb_buf)){
-   plot(crop(lcm,cityb[i,],mask=T),legend=F)
-  plot(crop(cooling_stack_e[[j]], cityb_buf[i,],mask=T), main=paste(cityb_buf$LAU_NAME[i],"cooling","month",mdr[j]),add=T,legend=T)
+for(i in 1:nrow(cityb_buf_l[[j]])){
+   plot(crop(lcm,cityb_l[[j]][i,],mask=T),legend=F)
+  plot(crop(cooling_stack_e[[j]], cityb_buf_l[[j]][i,],mask=T), main=paste(cityb_buf_l[[j]]$LAU_NAME[i],"cooling","month",mdr[j]),add=T,legend=T)
   plot(roads_list[[i]],add=T)
 }
 ```
@@ -923,21 +921,21 @@ gc()
 cooling_list_m <- vector("list", length(mdr))
 for(j in 1:length(mdr)){
   # make a list for the city-wise cooling rasters
-  cooling_list <- vector("list", nrow(cityb_buf_m))
-  for(i in 1:nrow(cityb_buf_m)){
+  cooling_list <- vector("list", nrow(cityb_buf_m_l[[j]]))
+  for(i in 1:nrow(cityb_buf_m_l[[j]])){
     # get lcm
-    tmp_lcm <- crop(lcm2,cityb_buf_m[i,],mask=T)
+    tmp_lcm <- crop(lcm2,cityb_buf_m_l[[j]][i,],mask=T)
     tmp_lcm[tmp_lcm %in% c(810,910,1200)]<-NA # rivers, lakes, sea, are set to NA
     # get coefficients
-    alpha1h_ <- firstdf_n$est_intercept[firstdf_n$month==mdr[j] & firstdf_n$city==cityb_buf_m$LAU_NAME[i]]
-    beta1h_ <- firstdf_n$est_tcd[firstdf_n$month==mdr[j] & firstdf_n$city==cityb_buf_m$LAU_NAME[i]]
+    alpha1h_ <- firstdf_n$est_intercept[firstdf_n$month==mdr[j] & firstdf_n$city==cityb_buf_m_l[[j]]$LAU_NAME[i]]
+    beta1h_ <- firstdf_n$est_tcd[firstdf_n$month==mdr[j] & firstdf_n$city==cityb_buf_m_l[[j]]$LAU_NAME[i]]
     gamma1h_ <- firstdf_n$est_evap[firstdf_n$month==mdr[j] & firstdf_n$city==cityb_buf_m$LAU_NAME[i]]
     # create simulated lst rasters
-    lst_sim_green_ <- alpha1h_ + beta1h_*crop(tcdr_no,cityb_buf_m[i,],mask=T) + gamma1h_*crop(evapr_no,cityb_buf_m[i,],mask=T)
-    lst_sim_gray_ <- alpha1h_ + 0*crop(tcdr_no,cityb_buf_m[i,],mask=T) + 0*crop(evapr_no,cityb_buf_m[i,],mask=T)
+    lst_sim_green_ <- alpha1h_ + beta1h_*crop(tcdr_no,cityb_buf_m_l[[j]][i,],mask=T) + gamma1h_*crop(evapr_no,cityb_buf_m_l[[j]][i,],mask=T)
+    lst_sim_gray_ <- alpha1h_ + 0*crop(tcdr_no,cityb_buf_m_l[[j]][i,],mask=T) + 0*crop(evapr_no,cityb_buf_m_l[[j]][i,],mask=T)
     # create simulated air temp rasters
-    t_air_green_ <- alpha2h + beta2h*lst_sim_green_ + gamma2h*crop(lat_r,cityb_buf_m[i,],mask=T)
-    t_air_gray_ <- alpha2h + beta2h*lst_sim_gray_ + gamma2h*crop(lat_r,cityb_buf_m[i,],mask=T)
+    t_air_green_ <- alpha2h + beta2h*lst_sim_green_ + gamma2h*crop(lat_r,cityb_buf_m_l[[j]][i,],mask=T)
+    t_air_gray_ <- alpha2h + beta2h*lst_sim_gray_ + gamma2h*crop(lat_r,cityb_buf_m_l[[j]][i,],mask=T)
     # cooling
     cooling_ <- t_air_gray_ - t_air_green_
     # as in INCA we force negative values to be zero
@@ -951,6 +949,8 @@ for(j in 1:length(mdr)){
   }
   # in this function now we put the cities together and impose the mean cooling for the overlapping boundaries
   cooling_list_m[[j]] <- do.call(terra::mosaic,c(cooling_list,fun=mean))
+  # make sure extents align (when some urban areas are masked because of lack of heat, then it can happen that extent is smaller than usual)
+  cooling_list_m[[j]] <- terra::extend(cooling_list_m[[j]],terra::ext(lcm))
   # save
   writeRaster(cooling_list_m[[j]],file.path(rfp,paste0("cooling_n_",j,".tif")),overwrite=T)
 }
@@ -963,9 +963,9 @@ rm(cooling_list_m,cooling_stack)
 Plots for July
 ```{r,message = FALSE, results = 'hide', fig.height = 8}
 j=2
-for(i in 1:nrow(cityb_buf_m)){
-  plot(crop(lcm,cityb[i,],mask=T),legend=F)
-  plot(crop(cooling_stack_n[[j]], cityb_buf[i,],mask=T),main=paste(cityb_buf$LAU_NAME[i],"cooling","month",mdr[j]), add=T,legend=T)
+for(i in 1:nrow(cityb_buf_m_l[[j]])){
+  plot(crop(lcm,cityb_l[[j]][i,],mask=T),legend=F)
+  plot(crop(cooling_stack_n[[j]], cityb_buf_l[[j]][i,],mask=T),main=paste(cityb_buf_l[[j]]$LAU_NAME[i],"cooling","month",mdr[j]), add=T,legend=T)
   plot(roads_list[[i]],add=T)
 }
 ```
@@ -991,7 +991,7 @@ stl<-list()
 for(j in 1:length(mdr)){
   # Step 1: Make a stack of the relevant data and move it into a dataframe
   astack <- c(
-  cooling_stack_e[[j]],
+  terra::crop(cooling_stack_e[[j]],lcm2),
   n2r_no,
   lcm2)
   names(astack)<-c("cooling","region","lcm")
@@ -1071,7 +1071,7 @@ stl<-list()
 for(j in 1:length(mdr)){
   # Step 1: Make a stack of the relevant data and move it into a dataframe
   astack <- c(
-  cooling_stack_n[[j]],
+  terra::crop(cooling_stack_n[[j]],lcm2),
   n2r_no,
   lcm2)
   names(astack)<-c("cooling","region","lcm")
@@ -1143,7 +1143,7 @@ cstl<-list()
 for(j in 1:length(mdr)){
   # Step 1: Make a stack of the relevant data and move it into a dataframe
 astack <- c(
-  cooling_stack_e[[j]],
+  terra::crop(cooling_stack_e[[j]],lcm2),
   n2r_no,
   lcm2)
 names(astack)<-c("cooling","region","lcm")
@@ -1211,7 +1211,7 @@ cstl<-list()
 for(j in 1:length(mdr)){
   # Step 1: Make a stack of the relevant data and move it into a dataframe
 astack <- c(
-  cooling_stack_n[[j]],
+  terra::crop(cooling_stack_n[[j]],lcm2),
   n2r_no,
   lcm2)
 names(astack)<-c("cooling","region","lcm")
