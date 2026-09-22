@@ -29,6 +29,7 @@ Changes since version 2:
 
 - Added a parallel version based on the SCB method to define urban areas
 - Some formatting edits to the markdown document
+- Improved hot-day identification in urban areas
 
 
 # Abstract and Limitation
@@ -77,7 +78,7 @@ gc()
 Here is a table of data sources used in this project.
 
 ```{r}
-dfs<-data.frame(matrix(nrow=9,ncol=8))
+dfs<-data.frame(matrix(nrow=10,ncol=8))
 colnames(dfs) <- c("Input to","Data","Name","Provider","Resolution","Year","Future Updates","Notes")
 
 dfs[1,]<-c("Aggregation",
@@ -152,6 +153,14 @@ dfs[9,]<-c("Estimation, simulation, and aggregation",
            "2021",
            "unknown",
            "We use this as input to create alternative urban area specifications")
+dfs[10,]<-c("Estimation, simulation, and aggregation",
+           "Nordic daily maximum temperature data",
+           "NGCD_TX_type1_version_26.03_2024MMDD.nc",
+           "COPERNICUS",
+           "1km grid",
+           "2024",
+           "yearly (I think)",
+           "We use this as input to identify which urban areas should be included in which month")
 #print
 kable(dfs)
 # clean up
@@ -309,36 +318,68 @@ for(i in 1:nrow(cityb_buf)){
 
 ```
 
-
-Now next we need to identify which of these cities have experienced maximum daily temperatures of at least 25 degrees celsius in the reference year of 2024. For this purpose we first download and import Norwegian meteorological data for 2024 covering the four cities. For now I have eyeballed which weather stations fit in which city. Given that we observe maximum temperatures of at least 25 degrees celsius in all of them, the precise selection of weather stations does not really matter.
+Now next we need to identify which of these cities have experienced maximum daily temperatures of at least 25 degrees celsius in the reference year of 2024. For this purpose we use gridded COPERNICUS data on daily maximum temperatures. We aggregate this data to montly maps that show for each pixel the number of days on which temperatures exceeded 25 degrees. We then use this to filter for each month which urban areas have experienced any days with temperatures exceeding 25 degrees.
 ```{r,message = FALSE, results='hide'}
 gc()
-# read in meteorogogical data for stations inside the above city LAUs for 2024 -
-tempd <- read.csv(file.path(here::here(),"ancillary_data",
-                            "NO_2024_citylau_dailymaxtemp.csv"),sep=";")
-colnames(tempd)<-c("station_name","station_code","date","maxtemp")
-tempd$maxtemp <- sub(",",".",tempd$maxtemp )
-tempd$maxtemp <- as.numeric(tempd$maxtemp)
-# save all cities with daily temperatures above 25 degrees
-stations<-tempd %>% filter(maxtemp >= 25) %>% select(station_name) %>% unique()
-# check for months in each city
-heatmonths<-list()
-for (i in 1:nrow(stations)){
-  heatmonths[i]<- tempd %>% filter(maxtemp >= 25) %>% filter(station_name==stations[i,1]) %>% select(date) %>% unique()
+# make a function
+mask_heat_fun<-function(inputurbanshape,lcm,heatrast){
+  # Step 1: rasterise the inputshape
+  cityr<-terra::rasterize(inputurbanshape,lcm,field="LAU_ID")
+  # Step 2: align heatraster with lcm and make binary
+  heatrast<-resample(heatrast,lcm,method="near")
+  heatrast[heatrast>0]<-1
+  heatrast[heatrast==0]<-NA
+  # Step 3: Mask the urban raster by what falls under the heat days category
+  cityrm<-mask(cityr,heatrast)
+  # Step 4: Identify city codes that fall into the category
+  cities <- unique(na.omit(values(cityrm)))
+  citycodes <- levels(cityr)[[1]]$LAU_ID[levels(cityr)[[1]]$ID %in% cities]
+  # Step 5: filter city shape accordingly
+  outputurbanshape <- inputurbanshape[inputurbanshape$LAU_ID %in% citycodes,]
+  # Step 6: return result and tidy up
+  rm(cityr,cityrm,cities,citycodes)
+  return(outputurbanshape)
+  gc()
 }
-names(heatmonths)<-stations[,1]
-for(i in 1:nrow(stations)){
-  print(stations[i,1])
-  print(unique(substr(heatmonths[[i]],4,5)))
+
+# apply function
+cityb_l<-list()
+cityb_buf_l<-list()
+citytownb_l<-list()
+#citytownb_buf_l<-list()
+#citytownb_buf_m_l<-list()
+mdr=c(6,7,8,9)
+for(j in 1:length(mdr)){
+  cityb_l[[j]]<-mask_heat_fun(inputurbanshape=cityb,
+                    lcm=lcm,
+                    heatrast=terra::rast(file.path(here::here(),"ancillary_data",paste0("heatdays_",j,".tif")))
+                    )
+  cityb_buf_l[[j]]<-mask_heat_fun(inputurbanshape=cityb_buf,
+                    lcm=lcm,
+                    heatrast=terra::rast(file.path(here::here(),"ancillary_data",paste0("heatdays_",j,".tif")))
+                    )
+  citytownb_l[[j]]<-mask_heat_fun(inputurbanshape=citytownb,
+                    lcm=lcm,
+                    heatrast=terra::rast(file.path(here::here(),"ancillary_data",paste0("heatdays_",j,".tif")))
+                    )
+  # citytownb_buf_l[[j]]<-mask_heat_fun(inputurbanshape=citytownb_buf,
+  #                   lcm=lcm,
+  #                   heatrast=terra::rast(file.path(here::here(),"ancillary_data",paste0("heatdays_",j,".tif")))
+  #                   )
+  # citytownb_buf_m_l[[j]]<-mask_heat_fun(inputurbanshape=citytownb_buf_m,
+  #                   lcm=lcm,
+  #                   heatrast=terra::rast(file.path(here::here(),"ancillary_data",paste0("heatdays_",j,".tif")))
+  #                   )
 }
-# clean up
-rm(stations,tempd,heatmonths)
 ```
 
-So this shows that June and July are the months where we have observed daily max temps exceeding 25 degrees in all weather stations within the cities in question in 2024. August and September are months in which some city LAU have observed max temps exceeding 25 degrees. The Eurostat handbook suggests to use an inclusive approach. We therefore pick all available months for the LST data, which we read in next. Croping and reprojection is done outside of this script, because it is a computationally time-intensive process.
+Non-matching CRS doesn't matter. Our analysis shows the following. Month June 2024 includes `r length(cityb_l[[1]]$LAU_ID)` cities, and `r length(citytownb_l[[1]]$LAU_ID)` cities + towns that have experienced temperatures exceeding 25 degrees. Month July includes `r length(cityb_l[[2]]$LAU_ID)` cities and `r length(citytownb_l[[2]]$LAU_ID)` cities + towns. Month August includes `r length(cityb_l[[3]]$LAU_ID)` cities and `r length(citytownb_l[[3]]$LAU_ID)` cities + towns. Month September includes `r length(cityb_l[[4]]$LAU_ID)` cities and `r length(citytownb_l[[4]]$LAU_ID)` cities + towns. So these are the areas we compute our cooling for, in each of the cases. Towns that do not get included in the computation in any month, because they did not experience days with temperatures exceeding 25 degrees, are: `r citytownb$LAU_NAME[!citytownb$LAU_NAME %in% unique(c(citytownb_l[[1]]$LAU_NAME,citytownb_l[[2]]$LAU_NAME,citytownb_l[[3]]$LAU_NAME,citytownb_l[[4]]$LAU_NAME))]`.
+
+Now, continuing on from here, we only analyse cities, because we do not have LST data covering towns as well. The extension of this quantification to towns is left for future versions of the quantification.
 
 ### 3.2.2 LST data
 
+The Eurostat handbook suggests to use an inclusive approach. We therefore pick all available months for the LST data, which we read in next. Croping and reprojection is done outside of this script, because it is a computationally time-intensive process.
 ```{r,message = FALSE, results = 'hide'}
 gc()
 # read LST raster file ---------------------------------------------------------
@@ -575,11 +616,11 @@ firstdf_n <- firstdf_n %>%
 rm(reg1df,rl)
 ```
 
-Print the table, with rounded values (and some less interesting rows and columns removed). Here the Eurostat version.
+Print the table, with rounded values (and some less interesting rows and columns removed). Here the Eurostat version. We remove cities that have not experienced heat in the respective month.
 ```{r}
 # print result table
 kable(firstdf %>% 
-        filter(month %in% c(6,7)) %>%
+        filter((month==6 & city_code %in% cityb_l[[1]]$LAU_ID) | (month == 7 & city_code %in% cityb_l[[2]]$LAU_ID)) %>%
         select(-c(p_pixels_rm,p_pixels_rm_due_na_lcm,p_pixels_rm_due_na_data)) %>%
         mutate(across(where(is.numeric), ~ round(.x, 2))))
 ```
@@ -588,7 +629,7 @@ And here the version with stricter urban definition.
 ```{r}
 # print result table
 kable(firstdf_n %>% 
-        filter(month %in% c(6,7)) %>%
+        filter((month==6 & city_code %in% cityb_l[[1]]$LAU_ID) | (month == 7 & city_code %in% cityb_l[[2]]$LAU_ID)) %>%
         select(-c(p_pixels_rm,p_pixels_rm_due_na_lcm,p_pixels_rm_due_na_data)) %>%
         mutate(across(where(is.numeric), ~ round(.x, 2))))
 ```
@@ -713,10 +754,12 @@ cooldf_e<-cooldf
 rm(cooldf)
 ```
 
-Here is the resulting table (I only show June and July here, to make results easier to digest)
+Here is the resulting table (I only show June and July here, to make results easier to digest). Again we remove whatever cities have not experienced hot days in the respective month
 ```{r}
 # print result table
-kable(cooldf_e %>% filter(month %in% c(6,7)) %>% mutate(across(where(is.numeric), ~ round(.x, 2))))
+kable(cooldf_e %>% 
+        filter((month==6 & city_code %in% cityb_l[[1]]$LAU_ID) | (month == 7 & city_code %in% cityb_l[[2]]$LAU_ID)) %>%
+        mutate(across(where(is.numeric), ~ round(.x, 2))))
 ```
 
 Comparing these results with INCA outputs shows that we replicate the process quite closely, but not perfectly. I guess that differences mainly come from different geospatial projections. For July, the differences between average cooling from this script and the INCA process vary between 0.003 deg.C for Bergen and 0.09 deg.C for Bærum. For the same month, the differences between median cooling from this script and the INCA process vary between 0.001 deg.C for Bergen and 0.09 deg.C for Bærum.
@@ -778,7 +821,9 @@ rm(cooldf)
 Here is the resulting table (I only show June and July here, to make results easier to digest)
 ```{r}
 # print result table
-kable(cooldf_n %>% filter(month %in% c(6,7)) %>% mutate(across(where(is.numeric), ~ round(.x, 2))))
+kable(cooldf_n %>% 
+        filter((month==6 & city_code %in% cityb_l[[1]]$LAU_ID) | (month == 7 & city_code %in% cityb_l[[2]]$LAU_ID)) %>%
+        mutate(across(where(is.numeric), ~ round(.x, 2))))
 ```
 
 # 6. Compute aggregated results
@@ -814,6 +859,8 @@ As you can see, cooling is now a function of slightly different inputs than what
 ### 6.2.1 Eurostat version
 
 So here we compute cooling rasters based on the method described in the previous section. This we implement as closely as possible to INCA, but without inheriting INCA's bug using wrong coefficients. We also exclude water ecosystems from the computation as instructed by the handbook (INCA does not do this). As the Norwegian LCM does not include ecosystem "Marine inlets" in the first place, this means that we only need to exclude "Rivers and canals", "Lakes and reservoirs", and "Marine ecosystems".
+
+MM hier weiter. replace the city shapes with the heat-filtered version
 
 ```{r,message = FALSE, results = 'hide'}
 gc()
