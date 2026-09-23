@@ -319,7 +319,7 @@ for(i in 1:nrow(cityb_buf)){
 ```
 
 Now next we need to identify which of these cities have experienced maximum daily temperatures of at least 25 degrees celsius in the reference year of 2024. For this purpose we use gridded COPERNICUS data on daily maximum temperatures. We aggregate this data to montly maps that show for each pixel the number of days on which temperatures exceeded 25 degrees. We then use this to filter for each month which urban areas have experienced any days with temperatures exceeding 25 degrees.
-```{r,message = FALSE, results='hide'}
+```{r,message = FALSE, warning=FALSE, results='hide'}
 gc()
 # make a function
 mask_heat_fun<-function(inputurbanshape,lcm,heatrast){
@@ -365,11 +365,12 @@ for(j in 1:length(mdr)){
                     lcm=lcm,
                     heatrast=terra::rast(file.path(here::here(),"ancillary_data",paste0("heatdays_",j,".tif")))
                     )
-
 }
+# identify citytowns that never get included
+cni<-citytownb$LAU_NAME[!citytownb$LAU_NAME %in% unique(c(citytownb_l[[1]]$LAU_NAME,citytownb_l[[2]]$LAU_NAME,citytownb_l[[3]]$LAU_NAME,citytownb_l[[4]]$LAU_NAME))]
 ```
 
-Non-matching CRS doesn't matter. Our analysis shows the following. Month June 2024 includes `r length(cityb_l[[1]]$LAU_ID)` cities, and `r length(citytownb_l[[1]]$LAU_ID)` cities + towns that have experienced temperatures exceeding 25 degrees. Month July includes `r length(cityb_l[[2]]$LAU_ID)` cities and `r length(citytownb_l[[2]]$LAU_ID)` cities + towns. Month August includes `r length(cityb_l[[3]]$LAU_ID)` cities and `r length(citytownb_l[[3]]$LAU_ID)` cities + towns. Month September includes `r length(cityb_l[[4]]$LAU_ID)` cities and `r length(citytownb_l[[4]]$LAU_ID)` cities + towns. So these are the areas we compute our cooling for, in each of the cases. Towns that do not get included in the computation in any month, because they did not experience days with temperatures exceeding 25 degrees, are: `r citytownb$LAU_NAME[!citytownb$LAU_NAME %in% unique(c(citytownb_l[[1]]$LAU_NAME,citytownb_l[[2]]$LAU_NAME,citytownb_l[[3]]$LAU_NAME,citytownb_l[[4]]$LAU_NAME))]`.
+Non-matching CRS doesn't matter. Our analysis shows the following. Month June 2024 includes `r length(cityb_l[[1]]$LAU_ID)` cities, and `r length(citytownb_l[[1]]$LAU_ID)` cities + towns that have experienced temperatures exceeding 25 degrees. Month July includes `r length(cityb_l[[2]]$LAU_ID)` cities and `r length(citytownb_l[[2]]$LAU_ID)` cities + towns. Month August includes `r length(cityb_l[[3]]$LAU_ID)` cities and `r length(citytownb_l[[3]]$LAU_ID)` cities + towns. Month September includes `r length(cityb_l[[4]]$LAU_ID)` cities and `r length(citytownb_l[[4]]$LAU_ID)` cities + towns. So these are the areas we compute our cooling for, in each of the cases. Towns that do not get included in the computation in any month, because they did not experience days with temperatures exceeding 25 degrees, are: `r if(is.null(cni)){"None"}else{cni}`.
 
 Now, continuing on from here, we only analyse cities, because we do not have LST data covering towns as well. The extension of this quantification to towns is left for future versions of the quantification.
 
@@ -855,9 +856,6 @@ As you can see, cooling is now a function of slightly different inputs than what
 ### 6.2.1 Eurostat version
 
 So here we compute cooling rasters based on the method described in the previous section. This we implement as closely as possible to INCA, but without inheriting INCA's bug using wrong coefficients. We also exclude water ecosystems from the computation as instructed by the handbook (INCA does not do this). As the Norwegian LCM does not include ecosystem "Marine inlets" in the first place, this means that we only need to exclude "Rivers and canals", "Lakes and reservoirs", and "Marine ecosystems".
-
-MM hier weiter. replace the city shapes with the heat-filtered version
-
 ```{r,message = FALSE, results = 'hide'}
 gc()
 ### We run this as a loop across months and cities. Following INCA's python implementation as close as possible
@@ -1359,5 +1357,5 @@ Here we have a further possible inconsistency between the city-statistics and th
 
 Several ideas, including:
 
-- Use alternative LST data with better coverage, or otherwise a median or mean map of LST across months to minimise coverage gaps.
+- Use alternative LST data with better coverage, or otherwise a median or mean map of LST across months to minimise coverage gaps. The current Lst data have been masked to city LAUs. If we had unmasked data, we could include all towns in the computation as well. This would increase the sample from 8 kommuner to up to 75 kommuner. It would provide more detailed and regionally varying information, and it would also create more representative results at the aggregate NUTS2 and NUTS0 level.
 - Include more controls in the regression models. To change the cooling results, the controls would have to capture something that is currently (unintentionally) captured by vegetation. 
