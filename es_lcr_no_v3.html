@@ -1595,7 +1595,7 @@ float: left;
 }
 </style>
 <p>Magnus Merkle (SSB)</p>
-<p>Naturregnskapsprosjekt, 22. September 2026</p>
+<p>Naturregnskapsprosjekt, 23. September 2026</p>
 <p>Please do not share. This is work in progress.</p>
 <p><br />
 </p>
@@ -2033,12 +2033,10 @@ ccr_buf &lt;- ifel(ccr_buf,1,NA)
 # make a polygon from it
 urb_pol &lt;- as.polygons(ccr_buf, dissolve = TRUE, na.rm = TRUE)
 # and then mask our city LAUs with this polygon
-cityb_buf_m&lt;-intersect(cityb_buf,urb_pol)</code></pre>
-<pre><code>## Warning: [intersect] different crs</code></pre>
-<pre class="r"><code># and then the same for towns
-citytownb_buf_m&lt;-intersect(citytownb_buf,urb_pol)</code></pre>
-<pre><code>## Warning: [intersect] different crs</code></pre>
-<pre class="r"><code># tidy up
+cityb_buf_m&lt;-intersect(cityb_buf,urb_pol)
+# and then the same for towns
+citytownb_buf_m&lt;-intersect(citytownb_buf,urb_pol)
+# tidy up
 rm(hdcr,ucr,ccr,ccr_buf,urb_pol)</code></pre>
 <p>Now let’s make a plot of all cities, with a blue shade for areas that
 are included in the stricter urban approach.</p>
@@ -2110,7 +2108,8 @@ for(j in 1:length(mdr)){
                     lcm=lcm,
                     heatrast=terra::rast(file.path(here::here(),&quot;ancillary_data&quot;,paste0(&quot;heatdays_&quot;,j,&quot;.tif&quot;)))
                     )
-}
+  gc()
+  }
 # identify citytowns that never get included
 cni&lt;-citytownb$LAU_NAME[!citytownb$LAU_NAME %in% unique(c(citytownb_l[[1]]$LAU_NAME,citytownb_l[[2]]$LAU_NAME,citytownb_l[[3]]$LAU_NAME,citytownb_l[[4]]$LAU_NAME))]</code></pre>
 <p>Non-matching CRS doesn’t matter. Our analysis shows the following.
@@ -2121,7 +2120,7 @@ cities + towns. Month September includes 8 cities and 65 cities + towns.
 So these are the areas we compute our cooling for, in each of the cases.
 Towns that do not get included in the computation in any month, because
 they did not experience days with temperatures exceeding 25 degrees,
-are: .</p>
+are: None.</p>
 <p>Now, continuing on from here, we only analyse cities, because we do
 not have LST data covering towns as well. The extension of this
 quantification to towns is left for future versions of the

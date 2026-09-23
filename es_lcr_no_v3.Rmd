@@ -17,7 +17,7 @@ table {
 
 Magnus Merkle (SSB)
 
-Naturregnskapsprosjekt, 22. September 2026
+Naturregnskapsprosjekt, 23. September 2026
 
 Please do not share. This is work in progress.
 
@@ -273,7 +273,7 @@ rm(lev)
 ```
 
 Now as an alternative specification, we create an urban area definition similar to what Statistics Sweden has implemented. This is based on Eurostat raster data that takes in population. All 1km cells that host population of at least 5000 people are included. The area is then buffered by 1km, and subsequently intersected with city LAUs. So we stick to the same cities, but define the boundaries according to population density rather than administrative shapes.
-```{r, message=FALSE, results='hide'}
+```{r, message=FALSE, results='hide',warning=FALSE}
 # read in high-density cluster raster data
 hdcr<-terra::rast(file.path(d_fp,"..","GISCO","high_density","HDENS_CLST_2021.tif"))
 # read in urban cluster raster data
@@ -365,12 +365,13 @@ for(j in 1:length(mdr)){
                     lcm=lcm,
                     heatrast=terra::rast(file.path(here::here(),"ancillary_data",paste0("heatdays_",j,".tif")))
                     )
-}
+  gc()
+  }
 # identify citytowns that never get included
 cni<-citytownb$LAU_NAME[!citytownb$LAU_NAME %in% unique(c(citytownb_l[[1]]$LAU_NAME,citytownb_l[[2]]$LAU_NAME,citytownb_l[[3]]$LAU_NAME,citytownb_l[[4]]$LAU_NAME))]
 ```
 
-Non-matching CRS doesn't matter. Our analysis shows the following. Month June 2024 includes `r length(cityb_l[[1]]$LAU_ID)` cities, and `r length(citytownb_l[[1]]$LAU_ID)` cities + towns that have experienced temperatures exceeding 25 degrees. Month July includes `r length(cityb_l[[2]]$LAU_ID)` cities and `r length(citytownb_l[[2]]$LAU_ID)` cities + towns. Month August includes `r length(cityb_l[[3]]$LAU_ID)` cities and `r length(citytownb_l[[3]]$LAU_ID)` cities + towns. Month September includes `r length(cityb_l[[4]]$LAU_ID)` cities and `r length(citytownb_l[[4]]$LAU_ID)` cities + towns. So these are the areas we compute our cooling for, in each of the cases. Towns that do not get included in the computation in any month, because they did not experience days with temperatures exceeding 25 degrees, are: `r if(is.null(cni)){"None"}else{cni}`.
+Non-matching CRS doesn't matter. Our analysis shows the following. Month June 2024 includes `r length(cityb_l[[1]]$LAU_ID)` cities, and `r length(citytownb_l[[1]]$LAU_ID)` cities + towns that have experienced temperatures exceeding 25 degrees. Month July includes `r length(cityb_l[[2]]$LAU_ID)` cities and `r length(citytownb_l[[2]]$LAU_ID)` cities + towns. Month August includes `r length(cityb_l[[3]]$LAU_ID)` cities and `r length(citytownb_l[[3]]$LAU_ID)` cities + towns. Month September includes `r length(cityb_l[[4]]$LAU_ID)` cities and `r length(citytownb_l[[4]]$LAU_ID)` cities + towns. So these are the areas we compute our cooling for, in each of the cases. Towns that do not get included in the computation in any month, because they did not experience days with temperatures exceeding 25 degrees, are: `r if(length(cni)==0) {"None"} else {paste(cni,collapse=",")}`.
 
 Now, continuing on from here, we only analyse cities, because we do not have LST data covering towns as well. The extension of this quantification to towns is left for future versions of the quantification.
 
