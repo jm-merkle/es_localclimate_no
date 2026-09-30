@@ -30,6 +30,7 @@ Changes since version 3:
 - Removed truncation of negative cooling
 - Changed LST inputs to a seasonally adjusted median LST across relevant months
 - Removed INCA comparison
+- Aligned the city-wise calculation to the region-wise calculation for consistency (it is inconsistent in INCA)
 
 
 # Abstract and Limitation
@@ -416,38 +417,106 @@ lstr_stack <- c(lstr_6_no,lstr_7_no,lstr_8_no,lstr_9_no)
 rm(lstr_6_no,lstr_7_no,lstr_8_no,lstr_9_no)
 ```
 
-Then plot the LST data, to show that it has gaps. We use the land cover map as background. First for June:
+Then compute the median across these maps. A problem I have identified is that the LST data has large gaps, and for some of the cities this implies that there are hardly any month-overlapping LST data available. In INCA this problem is not explicitly sorted, so the median LST values can be representing a very small proportion of the city. We apply a gap-filling method here, which uses cross-sectional variation of LST across pixels within-months plus temporal variation of the across-pixel-median LST across months. Each pixel that has missing LST data for some month, gets allocated a constructed LST value, based on how it compares to other pixels in months where we have data for it, and how median LST in the city changes across months.
+```{r,message = FALSE, results = 'hide'}
+gc()
+# we keep all months in all cities, to make sure that numbers across cities
+# are comparable. INCA also doesn't drop months where LST is below 25 degrees.
+
+# we loop across cities, and then mosaic back together
+mlstl<-list()
+malstl<-list()
+# the city loop
+for(i in 1:nrow(cityb_buf)){
+  # Step 1: Extract the city
+  lst6<-crop(lstr_stack[[1]],cityb_buf[i,],mask=T)
+  lst7<-crop(lstr_stack[[2]],cityb_buf[i,],mask=T)
+  lst8<-crop(lstr_stack[[3]],cityb_buf[i,],mask=T)
+  lst9<-crop(lstr_stack[[4]],cityb_buf[i,],mask=T)
+  
+  # Step 2: Get median LST temp across available data in the city
+  mu6m <- median(values(lst6),na.rm=T)
+  mu7m <- median(values(lst7),na.rm=T)
+  mu8m <- median(values(lst8),na.rm=T)
+  mu9m <- median(values(lst9),na.rm=T)
+  
+  # Step 3: Compute difference from each pixel to the median in the month ("pixel anomaly")
+  a6m <- lst6 - mu6m
+  a7m <- lst7 - mu7m
+  a8m <- lst8 - mu8m
+  a9m <- lst9 - mu9m
+  
+  # Step 4: Compute for each pixel the mean anomly across months. Note that this
+  # is based on available pixels. So if a certain pixel has only data in one month,
+  # the result will be the anomaly measured in that month.
+  aavg <- mean(c(a6m,a7m,a8m,a9m), na.rm=TRUE)
+  
+  # Step 5: Construct a made up LST on the basis of the anomalies (average cross-
+  #sectional variation) and the median temperature of the month (accounts for
+  # temporal variation) 
+  r6 <- mu6m + aavg
+  r7 <- mu7m + aavg
+  r8 <- mu8m + aavg
+  r9 <- mu9m + aavg
+  
+  # Step 6: Fill the data gaps in each month with the made up data.
+  alst6 <- cover(lst6, r6)
+  alst7 <- cover(lst7, r7)
+  alst8 <- cover(lst8, r8)
+  alst9 <- cover(lst9, r9)
+  
+  # Step 6: Create a median LST map based on the "gap-filled" monthly LST data
+  # now let's create the median maps. And also one based on the non-modified data
+  malstl[[i]]<-median(c(alst6,alst7,alst8,alst9))
+  mlstl[[i]]<-median(c(lst6,lst7,lst8,lst9))
+  
+  # Step 7: clean up
+  rm(lst6,lst7,lst8,lst9,mu6m,mu7m,mu8m,mu9m,a6m,a7m,a8m,a9m,aavg,r6,r7,r8,r9,
+     alst6,alst7,alst8,alst9)
+}
+
+malst<-do.call(terra::mosaic,c(malstl,fun=mean))
+mlst<-do.call(terra::mosaic,c(mlstl,fun=mean))
+# align extents
+malst<-terra::extend(malst,terra::ext(lcm))
+mlst<-terra::extend(mlst,terra::ext(lcm))
+# make a stack and call it mlstr_stack
+mlstr_stack<-c(malst,mlst)
+names(mlstr_stack)<-c("SSB","INCA")
+# clean up
+rm(malstl,mlstl,lstr_stack,malst,mlst)
+```
+
+Then plot the ready LST data, to show what the gap-filling process does. First the non-modified data:
 ```{r,message = FALSE, results = 'hide', fig.height = 9}
 gc()
 # Let's plot the data
 for(i in 1:nrow(cityb_buf)){
-plot(mask(crop(lcm, cityb_buf[i,]),cityb_buf[i,]),main=paste(cityb_buf$LAU_NAME[i],"June"), legend=F)
-plot(mask(crop(lstr_stack[[1]], cityb_buf[i,]),cityb_buf[i,]),add=T)
+plot(mask(crop(lcm, cityb_buf[i,]),cityb_buf[i,]),main=paste(cityb_buf$LAU_NAME[i],"median LST non-modified"), legend=F)
+plot(mask(crop(mlstr_stack[[2]], cityb_buf[i,]),cityb_buf[i,]),add=T)
 plot(cityb_buf_m[i,],alpha=0.3,col="dodgerblue",add=T)
 plot(roads_list[[i]],add=T)
 }
 ```
 
-You see the largets data gaps for Sandnes and Bergen. Also some gaps for Trondheim and Stavanger. Then look at the maps for July:
+You see the largets data gaps for Sandnes and Bergen. Also some gaps for Trondheim and Stavanger. Then look at the modified (i.e. "gap-filled") version.
 ```{r,message = FALSE, results = 'hide', fig.height = 9}
 gc()
 # Let's plot the data
 for(i in 1:nrow(cityb_buf)){
-plot(mask(crop(lcm, cityb_buf[i,]),cityb_buf[i,]),main=paste(cityb_buf$LAU_NAME[i],"July"), legend=F)
-plot(mask(crop(lstr_stack[[2]], cityb_buf[i,]),cityb_buf[i,]),add=T)
+plot(mask(crop(lcm, cityb_buf[i,]),cityb_buf[i,]),main=paste(cityb_buf$LAU_NAME[i],"median LST modified"), legend=F)
+plot(mask(crop(mlstr_stack[[1]], cityb_buf[i,]),cityb_buf[i,]),add=T)
 plot(cityb_buf_m[i,],alpha=0.3,col="dodgerblue",add=T)
 plot(roads_list[[i]],add=T)
 }
 ```
 
-So for month July the largest gaps prevail in the LST data for Sandnes, Trondheim, and Bærum. Also substantial gaps for Oslo and Bergen, and some for Stavanger, Rælingen, and Lørenskog. The gaps do not look much different in the data for the other available months, so I omit plotting those here. I was wondering whether they could occur due to clouds, blanking out parts of the original satellite picture? On the other hand, I notice that some of the gaps look quite similar across months, which makes the cloud hypothesis less likely. In any case, what we do here is to compute median values across months first, so we get an LST map with the best possible coverage. Due to the fact that data is missing more in hot months, a simple median would create a downward bias in LST values. So what we compute here is a seasonally adjusted median LST.
-
+We'll use the modified version of the LST data in our quantifications. It is based on the original LST data where all pixels are available, and it uses the constructed LST data where the original data has gaps. Areas that are blanked out in all of the months of the original LST data cannot be filled with our modification method, and therefore remain. As you can see, this is the case for a large area of Trondheim (the same cloud blocking the satellite image each month? I don't believe it....), and some areas of Sandnes and Bergen.
 
 
 ### 3.2.3 TC and EVAP data
 
 Then we read in the other raster files needed. Tree cover density and then evaporation. For evaporation we have the choice between different datasets. One covering July to August, one covering June to August, and a third covering June to September. There is no guidance in the Eurostat handbook on which data to choose. To match the LST data selection, we choose to use June to September.
-
 ```{r, message = FALSE, results = 'hide'}
 gc()
 # rough crop
@@ -494,24 +563,23 @@ tcdr_no <- mask(crop(tcdr_no,cityb_buf),cityb_buf)
 # MM I have checked the resulting data and it looks fine. No gaps.
 
 # reproject lst raster data ----------------------------------------------------
-lstr_stack<-terra::project(lstr_stack,evapr_no)
+mlstr_stack<-terra::project(mlstr_stack,evapr_no)
 
 # tidy up
 rm(tcdr,evapr)
 ```
 
-Before we continue on with estimating our models, we first create a spatial mask for each month that represents the valid pixels we can base the model on.
+Before we continue on with estimating our models, we first create a spatial mask for each lst version that represents the valid pixels we can base the model on.
 ```{r, message = FALSE, results = 'hide'}
-mask_6_no<-terra::ifel(!is.na(evapr_no) & !is.na(tcdr_no) & !is.na(lstr_stack[[1]]),1,NA)
-mask_7_no<-terra::ifel(!is.na(evapr_no) & !is.na(tcdr_no) & !is.na(lstr_stack[[2]]),1,NA)
-mask_8_no<-terra::ifel(!is.na(evapr_no) & !is.na(tcdr_no) & !is.na(lstr_stack[[3]]),1,NA)
-mask_9_no<-terra::ifel(!is.na(evapr_no) & !is.na(tcdr_no) & !is.na(lstr_stack[[4]]),1,NA)
+mask_inca_no<-terra::ifel(!is.na(evapr_no) & !is.na(tcdr_no) & !is.na(mlstr_stack[["INCA"]]),1,NA)
+mask_ssb_no<-terra::ifel(!is.na(evapr_no) & !is.na(tcdr_no) & !is.na(mlstr_stack[["SSB"]]),1,NA)
 
-mask_stack<-c(mask_6_no,mask_7_no,mask_8_no,mask_9_no)
+mask_stack<-c(mask_ssb_no,mask_inca_no)
+names(mask_stack)<-c("SSB","INCA")
 # then we need lcm, make sure it is aligned with the rest of the raster data
 lcm2 <- resample(lcm,mask_stack,method='near')
 #clean up
-rm(mask_6_no,mask_7_no,mask_8_no,mask_9_no)
+rm(mask_inca_no,mask_ssb_no)
 gc()
 ```
 
@@ -520,12 +588,12 @@ gc()
 We loop across cities and across available months here. In each city and month we run a regression where grid cells are units of observation. Predicting LST with TCD and EVAP. We store the resulting coefficients for each city and month.
 ```{r, message = FALSE, results = 'hide'}
 gc()
-# months to consider
-mdr<-c(6,7,8,9)
+# lsts to consider
+mdr<-c("SSB","INCA")
 
 # our dataframe for results
 reg1df<-as.data.frame(matrix(nrow=1,ncol=14))
-colnames(reg1df)<-c("month","city","pixels_in_shp","p_pixels_used","p_pixels_rm",
+colnames(reg1df)<-c("LST_version","city","pixels_in_shp","p_pixels_used","p_pixels_rm",
                     "p_pixels_rm_due_na_lcm","p_pixels_rm_due_na_data","avg_lst",
                     "avg_tcd","avg_evap","est_intercept","est_tcd","est_evap",
                     "R2")
@@ -540,40 +608,57 @@ first_regression_function<-function(cityshp,lst_rfile,tcd_rfile,evap_rfile){
   edf<-as.data.frame(estack)
   clean_edf <- edf %>% drop_na()
   rm(estack)
-  # Step 2: Run regression
-  elm <- lm(lst ~ tcd + evap, data = edf)
+  # Step 2: Run regression (if there is any data)
+  if(nrow(clean_edf)>0){
+    elm <- lm(lst ~ tcd + evap, data = edf)
+    } else {
+    elm <- NULL
+    }
   # Step 3: Save relevant info
   rv<-vector()
   # total pixel number in shape
   rv[1] <- mask(crop(init(lst_rfile, 1), cityshp), cityshp) %>% ncell()
   # proportion of pixels used
-  rv[2] <- nobs(elm) / rv[1]
+  if(nrow(clean_edf)>0){
+    rv[2] <- nobs(elm) / rv[1]
+    } else {
+    rv[2] <- 0
+    }
   # proportion of pixels removed
   rv[3] <- 1 - rv[2]
   # proportion of pixels removed because outside of lcm data
   rv[4] <- 1 - (nrow(edf) / rv[1])
   # proportion of pixels removed because of data gaps (lst,tcd,evap)
-  rv[5] <- (nrow(edf) - nobs(elm)) / rv[1]
-  # average land surface temp
+  if(nrow(clean_edf)>0){
+    rv[5] <- (nrow(edf) - nobs(elm)) / rv[1]
+    } else {
+    rv[5] <- 1
+    }
+  # land surface temp
   rv[6] <- mean(clean_edf$lst)
   # average tree cover density
   rv[7] <- mean(clean_edf$tcd)
   # average evapotranspiration
   rv[8] <- mean(clean_edf$evap)
-  # estimated intercept
-  rv[9] <- elm$coefficients[1]
-  # estimated coefficient on tre cover density
-  rv[10] <- elm$coefficients[2]
-  # estimated coefficient on evaporation
-  rv[11] <- elm$coefficients[3]
-  # model fit
-  rv[12] <- summary(elm)$r.squared
+  # model results
+  if(nrow(clean_edf)>0){
+    # estimated intercept
+    rv[9] <- elm$coefficients[1]
+    # estimated coefficient on tre cover density
+    rv[10] <- elm$coefficients[2]
+    # estimated coefficient on evaporation
+    rv[11] <- elm$coefficients[3]
+    # model fit
+    rv[12] <- summary(elm)$r.squared
+    } else {
+    rv[c(9,10,11,12)] <- NA
+    }
   # clean up and return result
   rm(edf,clean_edf,elm)
   return(rv)
 }
 
-## then loop across months and cities (eurostat version)
+## then loop across LST versions and cities (eurostat version)
 rl<-list()
 for(j in 1:length(mdr)){
   rl[[j]]<-reg1df
@@ -581,7 +666,7 @@ for(j in 1:length(mdr)){
     rl[[j]][i,1]<-mdr[j]
     rl[[j]][i,2]<-as.data.frame(cityb_buf[i,])$LAU_NAME
     rl[[j]][i,3:14]<-first_regression_function(cityshp = cityb_buf[i,],
-                                lst_rfile = lstr_stack[[j]],
+                                lst_rfile = mlstr_stack[[j]],
                                 tcd_rfile = tcdr_no,
                                 evap_rfile = evapr_no)
   }
@@ -602,7 +687,7 @@ for(j in 1:length(mdr)){
     rl[[j]][i,1]<-mdr[j]
     rl[[j]][i,2]<-as.data.frame(cityb_buf_m[i,])$LAU_NAME
     rl[[j]][i,3:14]<-first_regression_function(cityshp = cityb_buf_m[i,],
-                                lst_rfile = lstr_stack[[j]],
+                                lst_rfile = mlstr_stack[[j]],
                                 tcd_rfile = tcdr_no,
                                 evap_rfile = evapr_no)
   }
@@ -616,11 +701,10 @@ firstdf_n <- firstdf_n %>%
 rm(reg1df,rl)
 ```
 
-Print the table, with rounded values (and some less interesting rows and columns removed). Here the Eurostat version. We remove cities that have not experienced heat in the respective month.
+Print the table, with rounded values (and some less interesting rows and columns removed). Here the Eurostat version.
 ```{r}
 # print result table
 kable(firstdf %>% 
-        filter((month==6 & city_code %in% cityb_l[[1]]$LAU_ID) | (month == 7 & city_code %in% cityb_l[[2]]$LAU_ID)) %>%
         select(-c(p_pixels_rm,p_pixels_rm_due_na_lcm,p_pixels_rm_due_na_data)) %>%
         mutate(across(where(is.numeric), ~ round(.x, 2))))
 ```
@@ -629,7 +713,6 @@ And here the version with stricter urban definition.
 ```{r}
 # print result table
 kable(firstdf_n %>% 
-        filter((month==6 & city_code %in% cityb_l[[1]]$LAU_ID) | (month == 7 & city_code %in% cityb_l[[2]]$LAU_ID)) %>%
         select(-c(p_pixels_rm,p_pixels_rm_due_na_lcm,p_pixels_rm_due_na_data)) %>%
         mutate(across(where(is.numeric), ~ round(.x, 2))))
 ```
@@ -643,7 +726,6 @@ In this second step we use weather station data to estimate a linear model of ma
 ## 4.2 Import data
 
 Read in a single dataframe containing weather station data. This is the training data from the US.
-
 ```{r, message = FALSE, results = 'hide'}
 gc()
 # read in weather station data
@@ -660,7 +742,8 @@ A single regression to estimate a linear model. Predicting maximum air temperatu
 ```{r, message = FALSE, results = 'hide'}
 gc()
 # So here we now estimate the model and store the coefficients and adjusted r squared
-wlm <- lm(TempMax ~ st + Ycoor, data = wstd)
+# filter the data to only feature cases of positive temperature (has no effect because the data doesn't contain the opposite case)
+wlm <- lm(TempMax ~ st + Ycoor, data = wstd %>% filter(TempMax > 0))
 alpha2h <- wlm$coefficients['(Intercept)']
 beta2h <- wlm$coefficients['st']
 gamma2h <- wlm$coefficients['Ycoor']
@@ -702,49 +785,49 @@ As the formulation shows, cooling is a function of the estimated intercept of th
 
 ## 5.2 Compute cooling (eurostat version)
 
-Make a loop where we compute the cooling for each city in each month. Based on the method, it is possible to get positive and negative cooling values for pixels. The guidance says nothing about that.
+Make a loop where we compute the cooling for each city in each month. Based on the method, it is possible to get positive and negative cooling values for pixels. The guidance says nothing about that. We keep all.
 ```{r,message = FALSE, results = 'hide'}
 gc()
 
 # make a dataframe from firstdf
-cooldf<-firstdf %>% select(month,city,city_code,pixels_in_shp,p_pixels_used)
+cooldf<-firstdf %>% select(LST_version,city,city_code,pixels_in_shp,p_pixels_used)
 cooldf['T_air_sim']<-NA
 cooldf['T_air_zero_sim']<-NA
 cooldf['average_cooling']<-NA
 cooldf['median_cooling']<-NA
 
 # Project raster to geographic coordinates
-tmp_ll <- project(lstr_stack[[1]], "EPSG:4326")
+tmp_ll <- project(mlstr_stack[[1]], "EPSG:4326")
 # Create latitude raster
 lat_ll <- init(tmp_ll, "y")
 # Back to the original grid
-lat_r <- project(lat_ll, lstr_stack[[1]])
+lat_r <- project(lat_ll, mlstr_stack[[1]])
 rm(tmp_ll,lat_ll)
 
-# loop across months and cities
+# loop across LST versions and cities
 for(j in 1:length(mdr)){
   for(i in 1:nrow(cityb_buf)){
     # Step 1: Move spatial data into dataframe
     estack <- c(
-      crop(lstr_stack[[j]], cityb_buf[i,], mask = TRUE),
+      crop(mlstr_stack[[j]], cityb_buf[i,], mask = TRUE),
       crop(tcdr_no, cityb_buf[i,], mask = TRUE),
       crop(evapr_no, cityb_buf[i,], mask = TRUE),
       crop(lat_r, cityb_buf[i,], mask = TRUE))
     names(estack)<-c("lst","tcd","evap","lat")
     cmdf<-as.data.frame(estack) %>% drop_na()
     # Step 2: Fill
-    cmdf['alpha1h'] <- firstdf %>% filter(month==mdr[j] & city==cityb_buf$LAU_NAME[i]) %>% select(est_intercept)
-    cmdf['beta1h'] <- firstdf %>% filter(month==mdr[j] & city==cityb_buf$LAU_NAME[i]) %>% select(est_tcd)
-    cmdf['gamma1h'] <- firstdf %>% filter(month==mdr[j] & city==cityb_buf$LAU_NAME[i]) %>% select(est_evap)
+    cmdf['alpha1h'] <- firstdf %>% filter(LST_version==mdr[j] & city==cityb_buf$LAU_NAME[i]) %>% select(est_intercept)
+    cmdf['beta1h'] <- firstdf %>% filter(LST_version==mdr[j] & city==cityb_buf$LAU_NAME[i]) %>% select(est_tcd)
+    cmdf['gamma1h'] <- firstdf %>% filter(LST_version==mdr[j] & city==cityb_buf$LAU_NAME[i]) %>% select(est_evap)
     #cmdf['lst_h'] <-  cmdf$alpha1h + (cmdf$tcd*cmdf$beta1h) + (cmdf$evap*cmdf$gamma1h)
     cmdf['t_air_h'] <- alpha2h + (cmdf$lst*beta2h) + (cmdf$lat*gamma2h)
     cmdf['t_air_zero_h'] <- alpha2h + (cmdf$alpha1h*beta2h) + (cmdf$lat*gamma2h)
     cmdf['cool'] <- cmdf$t_air_zero_h - cmdf$t_air_h
     # Step 3: Move into cooldf
-    cooldf$T_air_sim[cooldf$month==mdr[j] & cooldf$city==cityb_buf$LAU_NAME[i]] <- mean(cmdf$t_air_h)
-    cooldf$T_air_zero_sim[cooldf$month==mdr[j] & cooldf$city==cityb_buf$LAU_NAME[i]] <- mean(cmdf$t_air_zero_h)
-    cooldf$average_cooling[cooldf$month==mdr[j] & cooldf$city==cityb_buf$LAU_NAME[i]] <- mean(cmdf$cool)
-    cooldf$median_cooling[cooldf$month==mdr[j] & cooldf$city==cityb_buf$LAU_NAME[i]] <- median(cmdf$cool)
+    cooldf$T_air_sim[cooldf$LST_version==mdr[j] & cooldf$city==cityb_buf$LAU_NAME[i]] <- mean(cmdf$t_air_h)
+    cooldf$T_air_zero_sim[cooldf$LST_version==mdr[j] & cooldf$city==cityb_buf$LAU_NAME[i]] <- mean(cmdf$t_air_zero_h)
+    cooldf$average_cooling[cooldf$LST_version==mdr[j] & cooldf$city==cityb_buf$LAU_NAME[i]] <- mean(cmdf$cool)
+    cooldf$median_cooling[cooldf$LST_version==mdr[j] & cooldf$city==cityb_buf$LAU_NAME[i]] <- median(cmdf$cool)
     # Step 4: Clean up
     rm(estack,cmdf)
   }
@@ -754,15 +837,12 @@ cooldf_e<-cooldf
 rm(cooldf)
 ```
 
-Here is the resulting table (I only show June and July here, to make results easier to digest). Again we remove whatever cities have not experienced hot days in the respective month
+Here is the resulting table.
 ```{r}
 # print result table
 kable(cooldf_e %>% 
-        filter((month==6 & city_code %in% cityb_l[[1]]$LAU_ID) | (month == 7 & city_code %in% cityb_l[[2]]$LAU_ID)) %>%
         mutate(across(where(is.numeric), ~ round(.x, 2))))
 ```
-
-Comparing these results with INCA outputs shows that we replicate the process quite closely, but not perfectly. I guess that differences mainly come from different geospatial projections. For July, the differences between average cooling from this script and the INCA process vary between 0.003 deg.C for Bergen and 0.09 deg.C for Bærum. For the same month, the differences between median cooling from this script and the INCA process vary between 0.001 deg.C for Bergen and 0.09 deg.C for Bærum.
 
 ## 5.3 Compute cooling (strict urban)
 
@@ -771,18 +851,18 @@ Same as in the previous section, but based on the narrower urban definition.
 gc()
 
 # make a dataframe from firstdf
-cooldf<-firstdf_n %>% select(month,city,city_code,pixels_in_shp,p_pixels_used)
+cooldf<-firstdf_n %>% select(LST_version,city,city_code,pixels_in_shp,p_pixels_used)
 cooldf['T_air_sim']<-NA
 cooldf['T_air_zero_sim']<-NA
 cooldf['average_cooling']<-NA
 cooldf['median_cooling']<-NA
 
 # Project raster to geographic coordinates
-tmp_ll <- project(lstr_stack[[1]], "EPSG:4326")
+tmp_ll <- project(mlstr_stack[[1]], "EPSG:4326")
 # Create latitude raster
 lat_ll <- init(tmp_ll, "y")
 # Back to the original grid
-lat_r <- project(lat_ll, lstr_stack[[1]])
+lat_r <- project(lat_ll, mlstr_stack[[1]])
 rm(tmp_ll,lat_ll)
 
 # loop across months and cities
@@ -790,25 +870,25 @@ for(j in 1:length(mdr)){
   for(i in 1:nrow(cityb_buf_m)){
     # Step 1: Move spatial data into dataframe
     estack <- c(
-      crop(lstr_stack[[j]], cityb_buf_m[i,], mask = TRUE),
+      crop(mlstr_stack[[j]], cityb_buf_m[i,], mask = TRUE),
       crop(tcdr_no, cityb_buf_m[i,], mask = TRUE),
       crop(evapr_no, cityb_buf_m[i,], mask = TRUE),
       crop(lat_r, cityb_buf_m[i,], mask = TRUE))
     names(estack)<-c("lst","tcd","evap","lat")
     cmdf<-as.data.frame(estack) %>% drop_na()
     # Step 2: Fill
-    cmdf['alpha1h'] <- firstdf_n %>% filter(month==mdr[j] & city==cityb_buf_m$LAU_NAME[i]) %>% select(est_intercept)
-    cmdf['beta1h'] <- firstdf_n %>% filter(month==mdr[j] & city==cityb_buf_m$LAU_NAME[i]) %>% select(est_tcd)
-    cmdf['gamma1h'] <- firstdf_n %>% filter(month==mdr[j] & city==cityb_buf_m$LAU_NAME[i]) %>% select(est_evap)
+    cmdf['alpha1h'] <- firstdf_n %>% filter(LST_version==mdr[j] & city==cityb_buf_m$LAU_NAME[i]) %>% select(est_intercept)
+    cmdf['beta1h'] <- firstdf_n %>% filter(LST_version==mdr[j] & city==cityb_buf_m$LAU_NAME[i]) %>% select(est_tcd)
+    cmdf['gamma1h'] <- firstdf_n %>% filter(LST_version==mdr[j] & city==cityb_buf_m$LAU_NAME[i]) %>% select(est_evap)
     #cmdf['lst_h'] <-  cmdf$alpha1h + (cmdf$tcd*cmdf$beta1h) + (cmdf$evap*cmdf$gamma1h)
     cmdf['t_air_h'] <- alpha2h + (cmdf$lst*beta2h) + (cmdf$lat*gamma2h)
     cmdf['t_air_zero_h'] <- alpha2h + (cmdf$alpha1h*beta2h) + (cmdf$lat*gamma2h)
     cmdf['cool'] <- cmdf$t_air_zero_h - cmdf$t_air_h
     # Step 3: Move into cooldf
-    cooldf$T_air_sim[cooldf$month==mdr[j] & cooldf$city==cityb_buf_m$LAU_NAME[i]] <- mean(cmdf$t_air_h)
-    cooldf$T_air_zero_sim[cooldf$month==mdr[j] & cooldf$city==cityb_buf_m$LAU_NAME[i]] <- mean(cmdf$t_air_zero_h)
-    cooldf$average_cooling[cooldf$month==mdr[j] & cooldf$city==cityb_buf_m$LAU_NAME[i]] <- mean(cmdf$cool)
-    cooldf$median_cooling[cooldf$month==mdr[j] & cooldf$city==cityb_buf_m$LAU_NAME[i]] <- median(cmdf$cool)
+    cooldf$T_air_sim[cooldf$LST_version==mdr[j] & cooldf$city==cityb_buf_m$LAU_NAME[i]] <- mean(cmdf$t_air_h)
+    cooldf$T_air_zero_sim[cooldf$LST_version==mdr[j] & cooldf$city==cityb_buf_m$LAU_NAME[i]] <- mean(cmdf$t_air_zero_h)
+    cooldf$average_cooling[cooldf$LST_version==mdr[j] & cooldf$city==cityb_buf_m$LAU_NAME[i]] <- mean(cmdf$cool)
+    cooldf$median_cooling[cooldf$LST_version==mdr[j] & cooldf$city==cityb_buf_m$LAU_NAME[i]] <- median(cmdf$cool)
     # Step 4: Clean up
     rm(estack,cmdf)
   }
@@ -818,11 +898,10 @@ cooldf_n<-cooldf
 rm(cooldf)
 ```
 
-Here is the resulting table (I only show June and July here, to make results easier to digest)
+Here is the resulting table.
 ```{r}
 # print result table
 kable(cooldf_n %>% 
-        filter((month==6 & city_code %in% cityb_l[[1]]$LAU_ID) | (month == 7 & city_code %in% cityb_l[[2]]$LAU_ID)) %>%
         mutate(across(where(is.numeric), ~ round(.x, 2))))
 ```
 
@@ -882,8 +961,6 @@ for(j in 1:length(mdr)){
     t_air_gray_ <- alpha2h + beta2h*lst_sim_gray_ + gamma2h*crop(lat_r,cityb_buf_l[[j]][i,],mask=T)
     # cooling
     cooling_ <- t_air_gray_ - t_air_green_
-    # as in INCA we force negative values to be zero
-    cooling_[cooling_<0] <- 0
     # unlike in INCA (but as requested in the hanbook) we set cooling of water bodies to NA
     cooling_[is.na(tmp_lcm)] <- NA
     # save in stack
@@ -939,8 +1016,6 @@ for(j in 1:length(mdr)){
     t_air_gray_ <- alpha2h + beta2h*lst_sim_gray_ + gamma2h*crop(lat_r,cityb_buf_m_l[[j]][i,],mask=T)
     # cooling
     cooling_ <- t_air_gray_ - t_air_green_
-    # as in INCA we force negative values to be zero
-    cooling_[cooling_<0] <- 0
     # unlike in INCA (but as requested in the hanbook) we set cooling of water bodies to NA
     cooling_[is.na(tmp_lcm)] <- NA
     # save in stack
