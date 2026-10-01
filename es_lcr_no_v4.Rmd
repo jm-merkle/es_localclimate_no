@@ -29,8 +29,9 @@ Changes since version 3:
 
 - Removed truncation of negative cooling
 - Changed LST inputs to a seasonally adjusted median LST across relevant months
-- Removed explicit INCA comparison
+- Removed explicit INCA comparisons, to simplify the document
 - Aligned the city-wise calculation to the region-wise calculation for consistency (it is inconsistent in INCA)
+- Reduced the number of printed results to only show what we report
 
 
 # Abstract and Limitation
@@ -77,7 +78,6 @@ gc()
 # 2. Data Sources
 
 Here is a table of data sources used in this project.
-
 ```{r}
 dfs<-data.frame(matrix(nrow=10,ncol=8))
 colnames(dfs) <- c("Input to","Data","Name","Provider","Resolution","Year","Future Updates","Notes")
@@ -476,7 +476,7 @@ mlst<-terra::extend(mlst,terra::ext(lcm))
 mlstr_stack<-c(malst,mlst)
 names(mlstr_stack)<-c("SSB","INCA")
 # clean up
-rm(malstl,mlstl,lstr_stack,malst,mlst)
+rm(malstl,mlstl,malst,mlst)
 ```
 
 Then plot the ready LST data, to show what the gap-filling process does. First the modified data:
@@ -590,7 +590,20 @@ wstd<-read.csv(file.path(d_fp,"version_2026_7",
                            "StationNeighborhood2016.csv"))
 ```
 
-## 3.6 Diagnostics
+## 3.6 Latitude
+
+A map of latitude, needed for simulations.
+```{r, message = FALSE, results = 'hide'}
+# Project raster to geographic coordinates
+tmp_ll <- project(lstr_stack[[1]], "EPSG:4326")
+# Create latitude raster
+lat_ll <- init(tmp_ll, "y")
+# Back to the original grid
+lat_r <- project(lat_ll, lstr_stack[[1]])
+rm(tmp_ll,lat_ll)
+```
+
+## 3.7 Diagnostics
 
 Here we analyse for each version of the model the amount of pixels and proportions of pixels that are valid, used, seasonally biased, and modified.
 ```{r, message = FALSE, results = 'hide'}
@@ -651,12 +664,19 @@ for(j in 1:length(lstversions)){
   dl[[j]]<-do.call("rbind",dl[[j]])
 }
 diagnosticsdf<-do.call("rbind",dl)
-rm(dl,dtable)
+rm(dl,dtable,lstr_stack)
 
 diagnosticsdf %>% filter(Urban_def==LST_version)
 ```
 
-Then print the resulting diagnostics table. We only show the two versions we report, i.e. the one for Eurostat based on city-LAUs and unmodified LST data, and the one for the national publication, based on population density reduced city-LAUs and modified LST data.
+Print the resulting diagnostics table. We only show the two versions we report, i.e. the one for Eurostat based on city-LAUs and unmodified LST data, and the one for the national publication, based on population density reduced city-LAUs and modified LST data. To explain the table:
+- pixels is the total number of pixels in the defined urban area. Given our 100m raster resolution it is equal to hectare.
+- valid_pixels is the number of pixels remaining when we subtract rivers, lakes, and the sea
+- used_valid_pixels is the number of pixels remaining when we consider data gaps
+- prop_validp_used is the proportion of used pixels over valid pixels
+- prop_validp_seasonb is the proportion of used pixels that are seasonally biased because LST data for some months is missing for them
+- prop_validp_modif is the proportion of used pixels that we modify in order to reduce seasonal bias ("gap-filling")
+
 ```{r}
 # print result table
 kable(diagnosticsdf %>% filter(Urban_def==LST_version))
@@ -794,6 +814,7 @@ Print the table, with rounded values (and some less interesting rows and columns
 # print result table
 kable(firstdf %>% 
         select(-c(p_pixels_rm,p_pixels_rm_due_na_lcm,p_pixels_rm_due_na_data)) %>%
+        filter(LST_version=="INCA") %>%
         mutate(across(where(is.numeric), ~ round(.x, 2))))
 ```
 
@@ -802,6 +823,7 @@ And here the version with stricter urban definition.
 # print result table
 kable(firstdf_n %>% 
         select(-c(p_pixels_rm,p_pixels_rm_due_na_lcm,p_pixels_rm_due_na_data)) %>%
+        filter(LST_version=="SSB") %>%
         mutate(across(where(is.numeric), ~ round(.x, 2))))
 ```
 
@@ -834,7 +856,7 @@ summary(wlm)
 rm(wlm)
 ```
 
-# 6. Simulate cooling w/o filter
+# 6. Simulate cooling
 
 ## 6.1 Overview
 
@@ -876,133 +898,9 @@ $$ \widehat{cooling^{alt.method}_{j,i}} = -\widehat{\beta}_{2} * (LST_{j,i} + \w
 
 As the formulation shows, cooling is a function of slightly different inputs than above, and this creates inconsistent results between the city statistics and the regional-by-ecosystem statistics. As said, we stick to the previous method.
 
-## 6.2 Compute city cooling (eurostat version)
+## 6.2 Compute cooling rasters
 
-Make a loop where we compute the cooling for each city in each month. Based on the method, it is possible to get positive and negative cooling values for pixels. The guidance says nothing about that. We keep all.
-```{r,message = FALSE, results = 'hide'}
-gc()
-
-# make a dataframe from firstdf
-cooldf<-firstdf %>% select(LST_version,city,city_code,pixels_in_shp,p_pixels_used)
-cooldf['T_air_sim']<-NA
-cooldf['T_air_zero_sim']<-NA
-cooldf['average_cooling']<-NA
-cooldf['median_cooling']<-NA
-
-# Project raster to geographic coordinates
-tmp_ll <- project(mlstr_stack[[1]], "EPSG:4326")
-# Create latitude raster
-lat_ll <- init(tmp_ll, "y")
-# Back to the original grid
-lat_r <- project(lat_ll, mlstr_stack[[1]])
-rm(tmp_ll,lat_ll)
-
-# loop across LST versions and cities
-for(j in 1:length(mdr)){
-  for(i in 1:nrow(cityb_buf)){
-    # Step 1: Move spatial data into dataframe
-    estack <- c(
-      crop(mlstr_stack[[j]], cityb_buf[i,], mask = TRUE),
-      crop(tcdr_no, cityb_buf[i,], mask = TRUE),
-      crop(evapr_no, cityb_buf[i,], mask = TRUE),
-      crop(lat_r, cityb_buf[i,], mask = TRUE))
-    names(estack)<-c("lst","tcd","evap","lat")
-    cmdf<-as.data.frame(estack) %>% drop_na()
-    # Step 2: Fill
-    cmdf['alpha1h'] <- firstdf %>% filter(LST_version==mdr[j] & city==cityb_buf$LAU_NAME[i]) %>% select(est_intercept)
-    cmdf['beta1h'] <- firstdf %>% filter(LST_version==mdr[j] & city==cityb_buf$LAU_NAME[i]) %>% select(est_tcd)
-    cmdf['gamma1h'] <- firstdf %>% filter(LST_version==mdr[j] & city==cityb_buf$LAU_NAME[i]) %>% select(est_evap)
-    cmdf['lst_h'] <-  cmdf$alpha1h + (cmdf$tcd*cmdf$beta1h) + (cmdf$evap*cmdf$gamma1h)
-    cmdf['t_air_h'] <- alpha2h + (cmdf$lst_h*beta2h) + (cmdf$lat*gamma2h)
-    cmdf['t_air_zero_h'] <- alpha2h + (cmdf$alpha1h*beta2h) + (cmdf$lat*gamma2h)
-    cmdf['cool'] <- cmdf$t_air_zero_h - cmdf$t_air_h
-    # Step 3: Move into cooldf
-    cooldf$T_air_sim[cooldf$LST_version==mdr[j] & cooldf$city==cityb_buf$LAU_NAME[i]] <- mean(cmdf$t_air_h)
-    cooldf$T_air_zero_sim[cooldf$LST_version==mdr[j] & cooldf$city==cityb_buf$LAU_NAME[i]] <- mean(cmdf$t_air_zero_h)
-    cooldf$average_cooling[cooldf$LST_version==mdr[j] & cooldf$city==cityb_buf$LAU_NAME[i]] <- mean(cmdf$cool)
-    cooldf$median_cooling[cooldf$LST_version==mdr[j] & cooldf$city==cityb_buf$LAU_NAME[i]] <- median(cmdf$cool)
-    # Step 4: Clean up
-    rm(estack,cmdf)
-  }
-}
-# save
-cooldf_e<-cooldf
-rm(cooldf)
-```
-
-Here is the resulting table.
-```{r}
-# print result table
-kable(cooldf_e %>% 
-        mutate(across(where(is.numeric), ~ round(.x, 2))))
-```
-
-## 6.3 Compute city cooling (strict urban)
-
-Same as in the previous section, but based on the narrower urban definition.
-```{r,message = FALSE, results = 'hide'}
-gc()
-
-# make a dataframe from firstdf
-cooldf<-firstdf_n %>% select(LST_version,city,city_code,pixels_in_shp,p_pixels_used)
-cooldf['T_air_sim']<-NA
-cooldf['T_air_zero_sim']<-NA
-cooldf['average_cooling']<-NA
-cooldf['median_cooling']<-NA
-
-# Project raster to geographic coordinates
-tmp_ll <- project(mlstr_stack[[1]], "EPSG:4326")
-# Create latitude raster
-lat_ll <- init(tmp_ll, "y")
-# Back to the original grid
-lat_r <- project(lat_ll, mlstr_stack[[1]])
-rm(tmp_ll,lat_ll)
-
-# loop across months and cities
-for(j in 1:length(mdr)){
-  for(i in 1:nrow(cityb_buf_m)){
-    # Step 1: Move spatial data into dataframe
-    estack <- c(
-      crop(mlstr_stack[[j]], cityb_buf_m[i,], mask = TRUE),
-      crop(tcdr_no, cityb_buf_m[i,], mask = TRUE),
-      crop(evapr_no, cityb_buf_m[i,], mask = TRUE),
-      crop(lat_r, cityb_buf_m[i,], mask = TRUE))
-    names(estack)<-c("lst","tcd","evap","lat")
-    cmdf<-as.data.frame(estack) %>% drop_na()
-    # Step 2: Fill
-    cmdf['alpha1h'] <- firstdf_n %>% filter(LST_version==mdr[j] & city==cityb_buf_m$LAU_NAME[i]) %>% select(est_intercept)
-    cmdf['beta1h'] <- firstdf_n %>% filter(LST_version==mdr[j] & city==cityb_buf_m$LAU_NAME[i]) %>% select(est_tcd)
-    cmdf['gamma1h'] <- firstdf_n %>% filter(LST_version==mdr[j] & city==cityb_buf_m$LAU_NAME[i]) %>% select(est_evap)
-    cmdf['lst_h'] <-  cmdf$alpha1h + (cmdf$tcd*cmdf$beta1h) + (cmdf$evap*cmdf$gamma1h)
-    cmdf['t_air_h'] <- alpha2h + (cmdf$lst_h*beta2h) + (cmdf$lat*gamma2h)
-    cmdf['t_air_zero_h'] <- alpha2h + (cmdf$alpha1h*beta2h) + (cmdf$lat*gamma2h)
-    cmdf['cool'] <- cmdf$t_air_zero_h - cmdf$t_air_h
-    # Step 3: Move into cooldf
-    cooldf$T_air_sim[cooldf$LST_version==mdr[j] & cooldf$city==cityb_buf_m$LAU_NAME[i]] <- mean(cmdf$t_air_h)
-    cooldf$T_air_zero_sim[cooldf$LST_version==mdr[j] & cooldf$city==cityb_buf_m$LAU_NAME[i]] <- mean(cmdf$t_air_zero_h)
-    cooldf$average_cooling[cooldf$LST_version==mdr[j] & cooldf$city==cityb_buf_m$LAU_NAME[i]] <- mean(cmdf$cool)
-    cooldf$median_cooling[cooldf$LST_version==mdr[j] & cooldf$city==cityb_buf_m$LAU_NAME[i]] <- median(cmdf$cool)
-    # Step 4: Clean up
-    rm(estack,cmdf)
-  }
-}
-# save
-cooldf_n<-cooldf
-rm(cooldf)
-```
-
-Here is the resulting table.
-```{r}
-# print result table
-kable(cooldf_n %>% 
-        mutate(across(where(is.numeric), ~ round(.x, 2))))
-```
-
-# 6. Compute results by ecosystem
-
-## 6.1 Compute cooling rasters
-
-### 6.1.1 Eurostat version
+### 6.2.1 Eurostat version
 
 So here we compute cooling rasters based on the method described in the previous section. This we implement as closely as possible to INCA, but without inheriting INCA's bug using wrong coefficients. We also exclude water ecosystems from the computation as instructed by the handbook (INCA does not do this). As the Norwegian LCM does not include ecosystem "Marine inlets" in the first place, this means that we only need to exclude "Rivers and canals", "Lakes and reservoirs", and "Marine ecosystems".
 ```{r,message = FALSE, results = 'hide'}
@@ -1048,26 +946,16 @@ cooling_stack_e <- cooling_stack
 rm(cooling_list_m,cooling_stack)
 ```
 
-Plots for "gap-filled" LST version
+Plot the cooling raster underlying the Eurostat version.
 ```{r,message = FALSE, results = 'hide', fig.height = 8}
-j=1
 for(i in 1:nrow(cityb_buf)){
-   plot(crop(lcm,cityb[i,],mask=T),legend=F)
-  plot(crop(cooling_stack_e[[j]], cityb_buf[i,],mask=T), main=paste(cityb_buf$LAU_NAME[i],"cooling","version",mdr[j]),range=c(-1,4),add=T,legend=T)
+   plot(crop(lcm,cityb[i,],mask=T),legend=F,main=paste(cityb_buf$LAU_NAME[i],"cooling","INCA_LST"))
+  plot(crop(cooling_stack_e[["INCA"]], cityb_buf[i,],mask=T),add=T,range=c(-1,4),legend=T)
   plot(roads_list[[i]],add=T)
 }
 ```
 
-Plots showing the difference to the INCA LST version. Notice that the LST gaps are not visible in the cooling rasters, because we only use simulated LST. But this does not change the fact that the coefficients can be based on a very small and unrepresentative land area. 
-```{r,message = FALSE, results = 'hide', fig.height = 8}
-for(i in 1:nrow(cityb_buf)){
-   plot(crop(lcm,cityb[i,],mask=T),legend=F)
-  plot(crop((cooling_stack_e[[1]]-cooling_stack_e[[2]]), cityb_buf[i,],mask=T), main=paste(cityb_buf$LAU_NAME[i],"cooling","version SSB compared INCA"),add=T,range=c(-0.3,0.3),legend=T)
-  plot(roads_list[[i]],add=T)
-}
-```
-
-### 6.1.2 Strict urban version
+### 6.2.2 SSB version
 
 ```{r,message = FALSE, results = 'hide'}
 gc()
@@ -1112,28 +1000,28 @@ cooling_stack_n <- cooling_stack
 rm(cooling_list_m,cooling_stack)
 ```
 
-Plots for the "gap-filled" LST version.
+Here are the cooling plots
 ```{r,message = FALSE, results = 'hide', fig.height = 8}
 j=1
 for(i in 1:nrow(cityb_buf_m)){
-  plot(crop(lcm,cityb[i,],mask=T),legend=F)
-  plot(crop(cooling_stack_n[[j]], cityb_buf[i,],mask=T),main=paste(cityb_buf$LAU_NAME[i],"cooling","LST version",mdr[j]), range=c(-1,4),add=T,legend=T)
+  plot(crop(lcm,cityb[i,],mask=T),legend=F,main=paste(cityb_buf$LAU_NAME[i],"cooling","LST version",mdr[j]))
+  plot(crop(cooling_stack_n[["SSB"]], cityb_buf[i,],mask=T),range=c(-1,4),add=T,legend=T)
   plot(roads_list[[i]],add=T)
 }
 ```
 
-Difference to the INCA-LST version
+And here some more plots, just to show the difference to the case where we do not use modifed LST data.
 ```{r,message = FALSE, results = 'hide', fig.height = 8}
 for(i in 1:nrow(cityb_buf_m)){
-  plot(crop(lcm,cityb[i,],mask=T),legend=F)
-  plot(crop((cooling_stack_n[[1]]-cooling_stack_n[[2]]), cityb_buf[i,],mask=T),main=paste(cityb_buf$LAU_NAME[i],"cooling","LST version difference"), range=c(-0.3,0.3),add=T,legend=T)
+  plot(crop(lcm,cityb[i,],mask=T),legend=F,main=paste(cityb_buf$LAU_NAME[i],"cooling","LST version difference"))
+  plot(crop((cooling_stack_n[[1]]-cooling_stack_n[[2]]), cityb_buf[i,],mask=T),range=c(-0.3,0.3),add=T,legend=T)
   plot(roads_list[[i]],add=T)
 }
 ```
 
-## 6.2 Eurostat deliverables
+## 6.3 Eurostat deliverables
 
-### 6.2.1 Overview
+### 6.3.1 Overview
 
 So here we report:
 -  Supply tables, by ecosystem, by NUTS2 region, and total NUTS0
@@ -1142,12 +1030,11 @@ So here we report:
 
 We use the version based on non-modified LST data (as INCA uses it) and based on non-modified city-LAU-based urban areas. 
 
-### 6.2.2 Supply table
+### 6.3.2 Supply table
 
 So here now we aggregate the cooling rasters by NUTS2 area, NUTS0 area, and ecosystem type. The 150m buffers imply that those NUTS2 areas that do not include city LAUs but that do have a border with city LAUs, do include cooling pixels. INCA does not address this problem. We set those cases to zero.
 
 The indicators we report in our supply and use tables are what INCA calls "simple average" for the by-ecosystem values and what INCA calls "weighted average" for cooling across all ecosystem types.
-
 ```{r,message = FALSE, results = 'hide'}
 gc()
 # now cooling by nuts and ecosystem
@@ -1215,7 +1102,7 @@ kable(stl_e[["INCA"]] %>% mutate(across(where(is.numeric), ~ round(.x, 2))))
 ```
 
 
-### 6.2.3 Contribution table
+### 6.3.3 Contribution table
 
 To show how different ecosystems contribute to total cooling in each region, we construct seperate tables to show a decomposition of the (weighted) averages reported in the above section. This is what INCA calls "weighted average" for the by-ecosystem values. The decomposed values are not very insightful on their own, because they reflect the proportion of different ecosystems in each region (if the region consists predominantly of forest, forest will have the largest contribution to cooling). The cooling effectiveness of different ecosystems is better captured by the values reported in the previous section.
 ```{r,message = FALSE, results = 'hide'}
@@ -1279,7 +1166,7 @@ kable(cstl_e[["INCA"]] %>% mutate(across(where(is.numeric), ~ round(.x, 2))))
 ```
 
 
-### 6.2.4 Use table
+### 6.3.4 Use table
 
 ```{r}
 utl<-list()
@@ -1304,9 +1191,9 @@ kable(utl_e[["INCA"]] %>% mutate(across(where(is.numeric), ~ round(.x, 2))))
 ```
 
 
-## 6.3 National deliverables
+## 6.4 National deliverables
 
-### 6.3.1 Overview
+### 6.4.1 Overview
 
 Here we report:
 -  Supply tables, by ecosystem, and by city
@@ -1314,7 +1201,7 @@ Here we report:
 
 Here we use the version based on modified LST data and modified urban areas.
 
-### 6.3.2 Supply table
+### 6.4.2 Supply table
 
 Same as in the previous section, but based on stricter urban definition, based on modified LST data, and aggregation to cities, rather than NUTS shapes.
 ```{r,message = FALSE, results = 'hide'}
@@ -1373,7 +1260,7 @@ Here are the results.
 kable(stl_n[["SSB"]] %>% mutate(across(where(is.numeric), ~ round(.x, 2))))
 ```
 
-### 6.3.3 Contribution table
+### 6.4.3 Contribution table
 
 Same as in the previous version, but now based on strict urban areas.
 ```{r,message = FALSE, results = 'hide'}
