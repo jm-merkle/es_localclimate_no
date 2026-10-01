@@ -1609,8 +1609,7 @@ relevant months</li>
 <li>Removed explicit INCA comparisons, to simplify the document</li>
 <li>Aligned the city-wise calculation to the region-wise calculation for
 consistency (it is inconsistent in INCA)</li>
-<li>Reduced the number of printed results to only show what we
-report</li>
+<li>Reduced the number of printed results to simplify the document</li>
 </ul>
 </div>
 <div id="abstract-and-limitation" class="section level1">
@@ -1623,7 +1622,7 @@ analysis), and stats (for regressions). The notebook is created on the
 basis of the following sources:</p>
 <ul>
 <li>INCA GIS Plugin Code Repository (2026). Last accessed 13 August
-2026, the relevant script is here: <a href="https://code.europa.eu/inca/gis-plugins/gis-plugins/-/blob/main/src/inca/localclimate/__init__.py" class="uri">https://code.europa.eu/inca/gis-plugins/gis-plugins/-/blob/main/src/inca/localclimate/__init__.py</a></li>
+2026, the most relevant script is here: <a href="https://code.europa.eu/inca/gis-plugins/gis-plugins/-/blob/main/src/inca/localclimate/__init__.py" class="uri">https://code.europa.eu/inca/gis-plugins/gis-plugins/-/blob/main/src/inca/localclimate/__init__.py</a></li>
 <li>Marando et al. (2022) Urban heat island mitigation by green
 infrastructure in European Functional Urban Areas. Sustainable Cities
 and Society, 103564</li>
@@ -1641,8 +1640,7 @@ Deliverable 2.2 Methodological report for the ecosystem service local
 climate regulation. Federal Statistical Office (DESTATIS).</li>
 </ul>
 <p>The quantification process follows the “default approach” described
-in Eurostat’s ecosystem accounts handbook. This approach requires less
-data capacity than the “advanced approach”.</p>
+in Eurostat’s ecosystem accounts handbook.</p>
 </div>
 <div id="filepaths-and-functions" class="section level1">
 <h1>1. Filepaths and Functions</h1>
@@ -1724,7 +1722,7 @@ dfs[6,]&lt;-c(&quot;Estimation&quot;,
            &quot;not gridded&quot;,
            &quot;2016&quot;,
            &quot;no&quot;,
-           &quot;This is weather station data from the US. Might be worth considering using weather data from Norway (due to different climate at the same latitudes as the US)&quot;)
+           &quot;This is weather station data from the US. Might be worth considering using weather data from Europe (due to different climate at the same latitudes as the US)&quot;)
 dfs[7,]&lt;-c(&quot;Aggregation&quot;,
            &quot;NUTS2 shapefile for Norway&quot;,
            &quot;NUTS2021_NO_LVL2_wos&quot;,
@@ -1849,7 +1847,7 @@ Monitoring Sevice</td>
 <td align="left">2016</td>
 <td align="left">no</td>
 <td align="left">This is weather station data from the US. Might be
-worth considering using weather data from Norway (due to different
+worth considering using weather data from Europe (due to different
 climate at the same latitudes as the US)</td>
 </tr>
 <tr class="odd">
@@ -2109,7 +2107,6 @@ Month June 2024 includes 8 cities, and 73 cities + towns that have
 experienced temperatures exceeding 25 degrees. Month July includes 8
 cities and 71 cities + towns. Month August includes 5 cities and 46
 cities + towns. Month September includes 8 cities and 65 cities + towns.
-So these are the areas we compute our cooling for, in each of the cases.
 Towns that do not get included in the computation in any month, because
 they did not experience days with temperatures exceeding 25 degrees,
 are: None.</p>
@@ -2163,13 +2160,15 @@ rm(lstr_6_no,lstr_7_no,lstr_8_no,lstr_9_no)</code></pre>
 identified is that the LST data has large gaps, and for some of the
 cities this implies that there are hardly any month-overlapping LST data
 available. In INCA this problem is not explicitly sorted, so the median
-LST values can be representing a very small proportion of the city. We
-apply a gap-filling method here, which uses cross-sectional variation of
-LST across pixels within-months plus temporal variation of the
-across-pixel-median LST across months. Each pixel that has missing LST
-data for some month, gets allocated a constructed LST value, based on
-how it compares to other pixels in months where we have data for it, and
-how median LST in the city changes across months.</p>
+LST values can be representing a very small proportion of the city at a
+specific month. The gaps are not random across months, which is why the
+INCA approach invokes a seasonal bias. We apply a gap-filling method
+here, which uses cross-sectional variation of LST across pixels
+within-months plus temporal variation of the across-pixel-median LST
+across months. Each pixel that has missing LST data for some month, gets
+allocated a constructed LST value, based on how it compares to other
+pixels in months where we have data for it, and how median LST in the
+city changes across months.</p>
 <pre class="r"><code>gc()
 # we keep all months in all cities, to make sure that numbers across cities
 # are comparable. INCA also doesn&#39;t drop months where LST is below 25 degrees.
@@ -2337,8 +2336,8 @@ rm(tcdr,evapr)</code></pre>
 <div id="mask-stack" class="section level2">
 <h2>3.4 Mask stack</h2>
 <p>Before we continue on with estimating our models, we first create a
-spatial mask for each lst version that represents the valid pixels we
-can base the model on.</p>
+spatial mask for each lst version that represents the pixels we have
+data for.</p>
 <pre class="r"><code>mask_inca_no&lt;-terra::ifel(!is.na(evapr_no) &amp; !is.na(tcdr_no) &amp; !is.na(mlstr_stack[[&quot;INCA&quot;]]),1,NA)
 mask_ssb_no&lt;-terra::ifel(!is.na(evapr_no) &amp; !is.na(tcdr_no) &amp; !is.na(mlstr_stack[[&quot;SSB&quot;]]),1,NA)
 
@@ -2440,16 +2439,23 @@ diagnosticsdf %&gt;% filter(Urban_def==LST_version)</code></pre>
 <p>Print the resulting diagnostics table. We only show the two versions
 we report, i.e. the one for Eurostat based on city-LAUs and unmodified
 LST data, and the one for the national publication, based on population
-density reduced city-LAUs and modified LST data. To explain the table: -
-pixels is the total number of pixels in the defined urban area. Given
-our 100m raster resolution it is equal to hectare. - valid_pixels is the
-number of pixels remaining when we subtract rivers, lakes, and the sea -
-used_valid_pixels is the number of pixels remaining when we consider
-data gaps - prop_validp_used is the proportion of used pixels over valid
-pixels - prop_validp_seasonb is the proportion of used pixels that are
-seasonally biased because LST data for some months is missing for them -
-prop_validp_modif is the proportion of used pixels that we modify in
-order to reduce seasonal bias (“gap-filling”)</p>
+density reduced city-LAUs and modified LST data. To explain the
+table:</p>
+<ul>
+<li>pixels is the total number of pixels in the defined urban area.
+Given our 100m raster resolution it is equal to hectare.</li>
+<li>valid_pixels is the number of pixels remaining when we subtract
+rivers, lakes, and the sea</li>
+<li>used_valid_pixels is the number of pixels remaining when we consider
+data gaps</li>
+<li>prop_validp_used is the proportion of used pixels over valid
+pixels</li>
+<li>prop_validp_seasonb is the proportion of used pixels that are
+seasonally biased because LST data for some months is missing for
+them</li>
+<li>prop_validp_modif is the proportion of used pixels that we modify in
+order to reduce seasonal bias (“gap-filling”)</li>
+</ul>
 <pre class="r"><code># print result table
 kable(diagnosticsdf %&gt;% filter(Urban_def==LST_version))</code></pre>
 <table>
@@ -2673,10 +2679,10 @@ coefficients of the linear model.</p>
 </div>
 <div id="run-regressions" class="section level2">
 <h2>4.2 Run regressions</h2>
-<p>We loop across cities and across available months here. In each city
-and month we run a regression where grid cells are units of observation.
-Predicting LST with TCD and EVAP. We store the resulting coefficients
-for each city and month.</p>
+<p>We loop across cities and across available LST versions here. In each
+city and for each LST version we run a regression where grid cells are
+units of observation. Predicting LST with TCD and EVAP. We store the
+resulting coefficients for each city and LST version.</p>
 <pre class="r"><code>gc()
 # lsts to consider
 mdr&lt;-c(&quot;SSB&quot;,&quot;INCA&quot;)
@@ -2769,7 +2775,7 @@ firstdf &lt;- firstdf %&gt;%
 #clean up
 rm(rl)
 
-## then loop across months and cities (strict urban version)
+## then loop across lst versions and cities (strict urban version)
 rl&lt;-list()
 for(j in 1:length(mdr)){
   rl[[j]]&lt;-reg1df
@@ -3162,17 +3168,17 @@ to apply the approach based on simulated LST data, not least because we
 expect that comparing modelled LST to modelled LST (as opposed to
 comparing observed LST to modelled LST) reduces potential bias.</p>
 <p>We first need to construct predicted land surface temperature <span class="math inline">\(\widehat{LST}_{j,i}\)</span> for each grid cell
-<span class="math inline">\(i\)</span> and month <span class="math inline">\(j\)</span> with our calibrated model coefficients
+<span class="math inline">\(i\)</span> and LST version <span class="math inline">\(j\)</span> with our calibrated model coefficients
 and observed inputs for the right hand side.</p>
 <p><span class="math display">\[ \widehat{LST}_{j,i} =
 \widehat{\alpha}_{1,j} + \widehat{\beta}_{1,j}TCD_{j,i} +
 \widehat{\gamma}_{1,j}EVAP_{ji}\]</span></p>
-<p>Then we compute for each grid cell <span class="math inline">\(i\)</span> and month <span class="math inline">\(j\)</span> the expected air temperature <span class="math inline">\(\widehat{T}^{air_{simLSTgreen}}_{j,i}\)</span>
+<p>Then we compute for each grid cell <span class="math inline">\(i\)</span> and LST version <span class="math inline">\(j\)</span> the expected air temperature <span class="math inline">\(\widehat{T}^{air_{simLSTgreen}}_{j,i}\)</span>
 given simulated conditions.</p>
 <p><span class="math display">\[ \widehat{T}^{air_{simLSTgreen}}_{j,i} =
 \widehat{\alpha}_{2} + \widehat{\beta}_{2} \widehat{LST}_{j,i} +
 \widehat{\gamma}_{2} LAT{j,i} \]</span>.</p>
-<p>Then we compute for each grid cell <span class="math inline">\(i\)</span> and month <span class="math inline">\(j\)</span> the expected air temperature in a
+<p>Then we compute for each grid cell <span class="math inline">\(i\)</span> and LST version <span class="math inline">\(j\)</span> the expected air temperature in a
 no-vegetation scenario, i.e. where <span class="math inline">\(\widehat{LST}^{zero}_{j,i} =
 \widehat{\alpha}_{1,j}\)</span> because <span class="math inline">\(TCD
 = EVAP = 0\)</span> in this case. So</p>
@@ -3180,17 +3186,17 @@ no-vegetation scenario, i.e. where <span class="math inline">\(\widehat{LST}^{z
 \widehat{\alpha}_{2} + \widehat{\beta}_{2} \widehat{LST}^{zero}_{j,i} +
 \widehat{\gamma}_{2} LAT_{j,i} \]</span>.</p>
 <p>Note that <span class="math inline">\(\widehat{LST}^{zero}_{j,i}\)</span> is constant
-for each grid cell in a city-month, because we only get one <span class="math inline">\(\widehat{\alpha}_{1,j}\)</span> for each
-city-month. The cooling effect is then retrieved for each grid cell
+for each grid cell in a city-LST-version, because we only get one <span class="math inline">\(\widehat{\alpha}_{1,j}\)</span> for each
+city-LST-version The cooling effect is then retrieved for each grid cell
 <span class="math inline">\(i\)</span> in city <span class="math inline">\(j\)</span> as</p>
 <p><span class="math display">\[ \widehat{cooling_{j,i}} =
 \widehat{T}^{air_{simLSTgray}}_{j,i} -
 \widehat{T}^{air_{simLSTgreen}}_{j,i}\]</span>.</p>
-<p>Again, as for the city statistics, we are effectively subtracting a
-constant no-vegetation counterfactual from the simulated varying air
-temperature with vegetation. After plugging in for estimated grid-cell
-temperature in both secenarios with vegetation and without vegetation,
-the previous equation simplifies to:</p>
+<p>So we are effectively subtracting a constant no-vegetation
+counterfactual from the simulated varying air temperature with
+vegetation. After plugging in for estimated grid-cell temperature in
+both secenarios with vegetation and without vegetation, the previous
+equation simplifies to:</p>
 <p><span class="math display">\[ \widehat{cooling}_{j,i} =
 -\widehat{\beta}_{2} * (\widehat{\beta}_{1,j}TCD_{j,i} +
 \widehat{\gamma}_{1,j}EVAP_{j,i})\]</span></p>
@@ -3201,12 +3207,12 @@ on the coefficients from both first and second regressions, as well as
 the tree cover raster and the evapotranspiration raster.</p>
 <p>Just for the sake of completeness, let me show what INCA does
 differently for its city statistics. So here we first compute for each
-grid cell <span class="math inline">\(i\)</span> and month <span class="math inline">\(j\)</span> the expected air temperature <span class="math inline">\(\widehat{T}^{air_{obsLSTgreen}}_{j,i}\)</span>
+grid cell <span class="math inline">\(i\)</span> and LST version <span class="math inline">\(j\)</span> the expected air temperature <span class="math inline">\(\widehat{T}^{air_{obsLSTgreen}}_{j,i}\)</span>
 given observed conditions.</p>
 <p><span class="math display">\[ \widehat{T}^{air_{obsLSTgreen}}_{j,i} =
 \widehat{\alpha}_{2} + \widehat{\beta}_{2}LST_{j,i} +
 \widehat{\gamma}_{2} LAT{j,i} \]</span>.</p>
-<p>Then we compute for each grid cell <span class="math inline">\(i\)</span> and month <span class="math inline">\(j\)</span> the expected air temperature in a
+<p>Then we compute for each grid cell <span class="math inline">\(i\)</span> and LST version <span class="math inline">\(j\)</span> the expected air temperature in a
 no-vegetation scenario, same as above. The cooling effect is then
 retrieved for each grid cell <span class="math inline">\(i\)</span> in
 city <span class="math inline">\(j\)</span> as</p>
@@ -3347,9 +3353,13 @@ where we do not use modifed LST data.</p>
 <h2>6.3 Eurostat deliverables</h2>
 <div id="overview-3" class="section level3">
 <h3>6.3.1 Overview</h3>
-<p>So here we report: - Supply tables, by ecosystem, by NUTS2 region,
-and total NUTS0 - Contribution tables, from ecosystems, by NUTS2 region,
-and total NUTS0 - Use tables</p>
+<p>So here we report:</p>
+<ul>
+<li>Supply tables, by ecosystem, by NUTS2 region, and total NUTS0</li>
+<li>Contribution tables, from ecosystems, by NUTS2 region, and total
+NUTS0</li>
+<li>Use tables</li>
+</ul>
 <p>We use the version based on non-modified LST data (as INCA uses it)
 and based on non-modified city-LAU-based urban areas.</p>
 </div>
@@ -3749,8 +3759,11 @@ rm(utl)</code></pre>
 <h2>6.4 National deliverables</h2>
 <div id="overview-4" class="section level3">
 <h3>6.4.1 Overview</h3>
-<p>Here we report: - Supply tables, by ecosystem, and by city -
-Contribution tables, by ecosystem, and by city</p>
+<p>Here we report:</p>
+<ul>
+<li>Supply tables, by ecosystem, and by city</li>
+<li>Contribution tables, by ecosystem, and by city</li>
+</ul>
 <p>Here we use the version based on modified LST data and modified urban
 areas.</p>
 </div>
@@ -3952,7 +3965,7 @@ rm(stl)</code></pre>
 areas.</p>
 <pre class="r"><code>gc()
 # decomposed total cooling by ecosystem for each region
-# now make a loop across months
+# now make a loop across LST versions
 cstl&lt;-list()
 for(j in 1:length(mdr)){
   # Step 1: Make a stack of the relevant data and move it into a dataframe
